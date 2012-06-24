@@ -50,7 +50,7 @@ public class Merger {
 
     public String getMergeIdAsString() {return merge_id != null? merge_id.toString() : null;}
     public String getMergeIdHistory()  {return merge_id_history.toString();}
-    
+
     /**
      * Invoked upon receiving a MERGE event from the MERGE layer. Starts the merge protocol.
      * See description of protocol in DESIGN.
@@ -104,7 +104,7 @@ public class Merger {
             sendMergeRejectedResponse(sender, merge_id);
         }
     }
-  
+
 
     protected void _handleMergeRequest(Address sender, MergeId merge_id, Collection<? extends Address> mbrs) throws Exception {
         MergeId current_merge_id=this.merge_id;
@@ -128,7 +128,6 @@ public class Merger {
         ViewId tmp_vid=gms.getViewId();
         if(tmp_vid == null)
             throw new Exception("view ID is null; cannot return merge response");
-        
         View view=new View(tmp_vid, members);
 
         //[JGRP-524] - FLUSH and merge: flush doesn't wrap entire merge process
@@ -143,7 +142,7 @@ public class Merger {
         Digest digest=fetchDigestsFromAllMembersInSubPartition(view, merge_id);
         if(digest == null || digest.capacity() == 0)
             throw new Exception("failed fetching digests from subpartition members; dropping merge response");
-        
+
         sendMergeResponse(sender, view, digest, merge_id);
     }
 
@@ -327,7 +326,7 @@ public class Merger {
      */
     private Digest fetchDigestsFromAllMembersInSubPartition(final View view, MergeId merge_id) {
         final List<Address> current_mbrs=view.getMembers();
-        
+
         // Optimization: if we're the only member, we don't need to multicast the get-digest message
         if(current_mbrs == null || current_mbrs.size() == 1 && current_mbrs.get(0).equals(gms.local_addr))
             return new MutableDigest(view.getMembersRaw())
@@ -522,7 +521,7 @@ public class Merger {
             // now remove all members which don't have us in their view, so RPCs won't block (e.g. FLUSH)
             // https://jira.jboss.org/browse/JGRP-1061
             sanitizeViews(views);
-                
+
             // Add all different coordinators of the views into the hashmap and sets their members:
             Collection<Address> coordinators=Util.determineMergeCoords(views);
             for(Address coord: coordinators) {
@@ -693,8 +692,8 @@ public class Merger {
          * this method is prepared to resolve duplicate entries (for the same member). The resolution strategy for
          * views is to merge only 1 of the duplicate members. Resolution strategy for digests is to take the higher
          * seqnos for duplicate digests.<p>
-         * After merging all members into a Membership and subsequent sorting, the first member of the sorted membership
-         * will be the new coordinator. This method has a lock on merge_rsps.
+         * After merging all members into a Membership, arrange for the local node to be the new coordinator.
+         * This method has a lock on merge_rsps.
          * @param merge_rsps A list of MergeData items. Elements with merge_rejected=true were removed before. Is guaranteed
          *          not to be null and to contain at least 1 member.
          */
@@ -737,13 +736,15 @@ public class Merger {
                 all_members.addAll(coll);
             merged_mbrs.retainAll(all_members);
 
-            // the new coordinator is the first member of the consolidated & sorted membership list
-            Address new_coord=merged_mbrs.isEmpty()? null : merged_mbrs.get(0);
-            if(new_coord == null)
+            // We will be the new coordinator
+            if (!merged_mbrs.contains(gms.local_addr))
                 return null;
-            
+
+            merged_mbrs.remove(gms.local_addr);
+            merged_mbrs.add(0, gms.local_addr);
+
             // determine the new view; logical_time should be the highest view ID seen up to now plus 1
-            MergeView new_view=new MergeView(new_coord, logical_time + 1, merged_mbrs, subgroups);
+            MergeView new_view=new MergeView(gms.local_addr, logical_time + 1, merged_mbrs, subgroups);
 
             // determine the new digest
             MutableDigest new_digest=consolidateDigests(new_view, merge_rsps);
