@@ -22,7 +22,7 @@ public class Version {
     public static final short  major = 3;
     public static final short  minor = 3;
     public static final short  micro = 0;
-    public static final String description=major + "." + minor + "." + micro + ".Final";
+    public static final String description=major + "." + minor + "." + micro + ".Final.DCH";
 
     public static final short  version=encode(major, minor, micro);
     public static final String string_version=print(version);
@@ -32,7 +32,7 @@ public class Version {
     private static final int   MAJOR_MASK  = 0x00f800; // 1111100000000000 bit mask
     private static final int   MINOR_MASK  = 0x0007c0; //      11111000000 bit mask
     private static final int   MICRO_MASK  = 0x00003f; //           111111 bit mask
-    
+
 
 
     /**
