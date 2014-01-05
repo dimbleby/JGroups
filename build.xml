@@ -6,7 +6,7 @@
         build.xml file for JGroups. Needs Ant (jakarta.apache.org) to run
     </description>
 
-    <property name="version" value="3.4.2.Final"/>
+    <property name="version" value="3.4.2.Final.DCH"/>
     <property name="build.properties.file" value="build.properties"/>
     <property file="${build.properties.file}"/>
     <property name="root.dir" value="${basedir}"/>
@@ -38,7 +38,7 @@
     <property name="maven.executable" value="mvn"/>
     <property name="ivy.version" value="2.3.0" />
 
-	<!-- 5 minutes per test suite timeout -->
+  <!-- 5 minutes per test suite timeout -->
     <property name="unittest.timeout" value="1800000"/>
 
     <!-- default properties used in all test targets -->
@@ -131,7 +131,7 @@
     <target name="prepare" depends="retrieve">
         <property environment="env"/>
         <mkdir dir="${compile.dir}"/>
-    	<copy file="${build.properties.file}.template" tofile="${build.properties.file}" overwrite="false"/>
+      <copy file="${build.properties.file}.template" tofile="${build.properties.file}" overwrite="false"/>
     </target>
 
 
@@ -295,7 +295,7 @@
         <echo message="Building manual from docbook ..."/>
         <prot-properties-to-doc input="${protocols.xml}"/>
         <run-maven dir="${manual.dir}"/>
-    	<!--<delete file="${protocols.xml}.tmp"/>-->
+      <!--<delete file="${protocols.xml}.tmp"/>-->
         <touch file="${manual.dir}/target/timestamp"/>
     </target>
 
@@ -324,13 +324,13 @@
     </target>
 
 
-	<target name="create-schema" description="creates XML schema for this version of JGroups">
-		<delete dir="${compile.dir}/schema" failonerror="false"/>
-		<mkdir dir="${compile.dir}/schema"/>
-		<java classname="org.jgroups.util.XMLSchemaGenerator" classpathref="jg.classpath">
-			<arg line="-o ${compile.dir}/schema"/>
-		</java>
-	</target>
+  <target name="create-schema" description="creates XML schema for this version of JGroups">
+    <delete dir="${compile.dir}/schema" failonerror="false"/>
+    <mkdir dir="${compile.dir}/schema"/>
+    <java classname="org.jgroups.util.XMLSchemaGenerator" classpathref="jg.classpath">
+      <arg line="-o ${compile.dir}/schema"/>
+    </java>
+  </target>
 
 
     <target name="clean"
@@ -348,7 +348,7 @@
                 <include name="**/*~"/>
             </fileset>
         </delete>
-    	<!-- clean the docs directory if docs have been processed -->
+      <!-- clean the docs directory if docs have been processed -->
         <delete dir="${manual.dir}/target"/>
         <delete dir="${tutorial.dir}/target"/>
         <delete dir="${root.dir}/schema" failonerror="false"/>
@@ -385,17 +385,17 @@
         </java>
     </target>
 
-	<target name="keyStoreGenerated">
-	    <condition property="isKeyStoreGenerated">
-	        <and>
-	            <available filepath="${keystore.dir}" file="defaultStore.keystore"/>
-	    		<available filepath="${keystore.dir}" file="defaultStore2.keystore"/>
-	        </and>
-	    </condition>
-	</target>
+  <target name="keyStoreGenerated">
+      <condition property="isKeyStoreGenerated">
+          <and>
+              <available filepath="${keystore.dir}" file="defaultStore.keystore"/>
+          <available filepath="${keystore.dir}" file="defaultStore2.keystore"/>
+          </and>
+      </condition>
+  </target>
 
-	<target name="postcompile" depends="makeKeystore">
-	</target>
+  <target name="postcompile" depends="makeKeystore">
+  </target>
 
     <!--
 =============================== TestNG ======================================== -->
@@ -403,13 +403,13 @@
 
     <target name="all-tests">
         <sequential>
-        	<antcall target="functional"/>
-        	<antcall target="stack-independent"/>
+          <antcall target="functional"/>
+          <antcall target="stack-independent"/>
             <antcall target="udp"/>
             <antcall target="tcp"/>
             <antcall target="tcp-stress"/>
-        	<antcall target="udp-flush"/>
-        	<antcall target="tcp-flush"/>
+          <antcall target="udp-flush"/>
+          <antcall target="tcp-flush"/>
             <antcall target="time-sensitive"/>
             <antcall target="byteman"/>
         </sequential>
@@ -477,11 +477,11 @@
     </target>
 
     <target name="tcp" depends="postcompile,define-testng-task">
-    	<!-- Needed to force reading of properties. Otherwise tcp tests will fail -->
-    	<property name="build.properties.file" value="build.properties"/>
-    	<property file="${build.properties.file}"/>
+      <!-- Needed to force reading of properties. Otherwise tcp tests will fail -->
+      <property name="build.properties.file" value="build.properties"/>
+      <property file="${build.properties.file}"/>
 
-    	<mkdir dir="${tmp.dir}/test-results/xml/tcp"/>
+      <mkdir dir="${tmp.dir}/test-results/xml/tcp"/>
         <runtest testname.ext="tcp"
                  threadcount="5"
                  parallel="${parallel.tests}"
@@ -495,11 +495,11 @@
     </target>
 
     <target name="tcp-stress" depends="postcompile,define-testng-task">
-    	<!-- Needed to force reading of properties. Otherwise tcp tests will fail -->
-    	<property name="build.properties.file" value="build.properties"/>
-    	<property file="${build.properties.file}"/>
+      <!-- Needed to force reading of properties. Otherwise tcp tests will fail -->
+      <property name="build.properties.file" value="build.properties"/>
+      <property file="${build.properties.file}"/>
 
-    	<mkdir dir="${tmp.dir}/test-results/xml/tcp"/>
+      <mkdir dir="${tmp.dir}/test-results/xml/tcp"/>
         <runtest testname.ext="tcp"
                  threadcount="1"
                  parallel="${parallel.tests}"
@@ -513,10 +513,10 @@
     </target>
 
     <target name="tcp-flush" depends="postcompile,define-testng-task">
-    	<!-- Needed to force reading of properties. Otherwise tcp-flush tests will fail -->
-    	<property name="build.properties.file" value="build.properties"/>
-    	<property file="${build.properties.file}"/>
-    	<mkdir dir="${tmp.dir}/test-results/xml/tcp-flush"/>
+      <!-- Needed to force reading of properties. Otherwise tcp-flush tests will fail -->
+      <property name="build.properties.file" value="build.properties"/>
+      <property file="${build.properties.file}"/>
+      <mkdir dir="${tmp.dir}/test-results/xml/tcp-flush"/>
         <runtest testname.ext="tcp-flush"
                  threadcount="10"
                  parallel="${parallel.tests}"
@@ -564,8 +564,8 @@
                     usedefaultlisteners="false"
                     outputdir="@{outputdir}"
                     listeners="org.jgroups.util.JUnitXMLReporter"
-            		timeout="${unittest.timeout}"
-            	    verbose="${test.verbose}"
+                timeout="${unittest.timeout}"
+                  verbose="${test.verbose}"
                     >
                 <xmlfileset dir="${testng.conf.dir}" includes="@{testng.xmlfile}"/>
                 <sysproperty key="test.suffix" value="@{testname.ext}"/>
@@ -580,8 +580,8 @@
                 <jvmarg value="-Dtests.tmp.dir=${tmp.dir}"/>
                 <jvmarg value="-Dlog4j.configuration=file:${conf.dir}/log4j.properties"/>
                 <jvmarg value="-Dlog4j.configurationFile=${conf.dir}/log4j2.xml"/>
-                <jvmarg value="-Djava.net.preferIPv4Stack=${java.net.preferIPv4Stack}"/>                
-    		  	<jvmarg value="-Djava.net.preferIPv6Addresses=${java.net.preferIPv6Addresses}"/>
+                <jvmarg value="-Djava.net.preferIPv4Stack=${java.net.preferIPv4Stack}"/>
+            <jvmarg value="-Djava.net.preferIPv6Addresses=${java.net.preferIPv6Addresses}"/>
                 <jvmarg value="-Xms400M"/>
                 <jvmarg value="-Xmx800M"/>
             </testng>
