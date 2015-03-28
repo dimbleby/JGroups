@@ -644,8 +644,8 @@ public class Merger {
          * this method is prepared to resolve duplicate entries (for the same member). The resolution strategy for
          * views is to merge only 1 of the duplicate members. Resolution strategy for digests is to take the higher
          * seqnos for duplicate digests.<p>
-         * After merging all members into a Membership and subsequent sorting, the first member of the sorted membership
-         * will be the new coordinator. This method has a lock on merge_rsps.
+         * After merging all members into a Membership, arrange for the local node to be the new coordinator.
+         * This method has a lock on merge_rsps.
          * @param merge_rsps A list of MergeData items. Elements with merge_rejected=true were removed before. Is guaranteed
          *          not to be null and to contain at least 1 member
          * @param subviews Contains a list of Views, each View is a subgroup
@@ -687,10 +687,12 @@ public class Merger {
                 all_members.addAll(coll);
             merged_mbrs.retainAll(all_members);
 
-            // the new coordinator is the first member of the consolidated & sorted membership list
-            Address new_coord=merged_mbrs.isEmpty()? null : merged_mbrs.get(0);
-            if(new_coord == null)
+            // We will be the new coordinator
+            if (!merged_mbrs.contains(gms.local_addr))
                 return null;
+
+            merged_mbrs.remove(gms.local_addr);
+            merged_mbrs.add(0, gms.local_addr);
 
             // Remove views from subviews whose creator are not in the new membership
             for(Iterator<View> it=subviews.iterator(); it.hasNext();) {
@@ -702,7 +704,7 @@ public class Merger {
             }
 
             // determine the new view; logical_time should be the highest view ID seen up to now plus 1
-            MergeView new_view=new MergeView(new_coord, logical_time + 1, merged_mbrs, subviews);
+            MergeView new_view=new MergeView(gms.local_addr, logical_time + 1, merged_mbrs, subviews);
 
             // determine the new digest
             MutableDigest new_digest=consolidateDigests(new_view, merge_rsps);
