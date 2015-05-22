@@ -5,7 +5,7 @@
     <artifactId>jgroups</artifactId>
     <packaging>bundle</packaging>
     <name>JGroups</name>
-    <version>3.6.3.Final</version>
+    <version>@VERSION@</version>
     <url>http://www.jgroups.org</url>
     <description>
         Reliable cluster communication toolkit
@@ -112,6 +112,7 @@
                 <includes>
                     <include>*.xml</include>
                     <include>jg-messages*.properties</include>
+                    <include>VERSION.properties</include>
                 </includes>
                 <excludes>
                     <exclude>*-service.xml</exclude>

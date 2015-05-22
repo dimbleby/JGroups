@@ -6,10 +6,12 @@
         Ant/ivy based build.xml file for JGroups. Needs ant to run
     </description>
 
-    <property name="version"               value="3.6.3.Final"/>
+    <property name="root.dir"              value="${basedir}"/>
+    <property name="conf.dir"              value="${root.dir}/conf"/>
+    <property file="${conf.dir}/VERSION.properties"/> <!-- Defines jgroups.version -->
+    <property name="version"               value="${jgroups.version}"/>
     <property name="build.properties.file" value="build.properties"/>
     <property file="${build.properties.file}"/>
-    <property name="root.dir"              value="${basedir}"/>
     <property name="src.dir"               value="${root.dir}/src"/>
     <property name="tests.dir"             value="${root.dir}/tests"/>
     <property name="other.dir"             value="${tests.dir}/other"/>
@@ -28,7 +30,6 @@
     <property name="manual.dir"            value="${doc.dir}/manual"/>
     <property name="tutorial.dir"          value="${doc.dir}/tutorial"/>
     <property name="javadoc.dir"           value="${dist.dir}/javadoc"/>
-    <property name="conf.dir"              value="${root.dir}/conf"/>
     <property name="bin.dir"               value="${root.dir}/bin"/>
     <property name="keystore.dir"          value="${root.dir}/keystore"/>
     <property name="javadoc.packages"      value="org.jgroups.*"/>
@@ -39,7 +40,8 @@
     <property name="asciidoc.executable"   value="asciidoctor"/>
     <!-- Also available: colony.css, github.css etc -->
     <property name="asciidoctor-style"     value="./asciidoctor.css"/>
-    <property name="ivy.version"           value="2.4.0-rc1" />
+    <property name="ivy.version"           value="2.4.0" />
+    <property name="pom.template"          value="${conf.dir}/pom.template.xml"/>
 
 
 	<!-- 5 minutes per test suite timeout -->
@@ -134,7 +136,7 @@
     <!-- =================================
           target: publish-local
          ================================= -->
-    <target name="publish-local" depends="define-ivy-task"
+    <target name="publish-local" depends="define-ivy-task,jar"
             description="Publishes this project to the local ivy repo (artifacts need to be in ./dist)">
         <property name="revision" value="${version}"/>
 
@@ -158,6 +160,8 @@
 
         <!-- artifactspattern="${dist.dir}/[artifact]-[revision](-[classifier]).[ext]" -->
         <delete file="${dist.dir}/README"/>
+
+        <ivy:resolve file="ivy.xml"/>
 
         <ivy:publish artifactspattern="${dist.dir}/[artifact]-[revision](-[classifier]).[ext]"
                      publishivy="false"
@@ -205,7 +209,7 @@
                  uri="antlib:org.apache.ivy.ant" classpathref="jg.classpath"/>
     </target>
 
-    <target name="prepare" depends="retrieve">
+    <target name="prepare" depends="retrieve,make-pom">
         <property environment="env"/>
         <mkdir dir="${compile.dir}"/>
     	<copy file="${build.properties.file}.template" tofile="${build.properties.file}" overwrite="false"/>
@@ -299,7 +303,7 @@
              basedir="${compile.dir}"
              manifest="${conf.dir}/MANIFEST.MF"
              includes="org/jgroups/**">
-            <fileset dir="${conf.dir}" includes="*.xml, jg-messages*.properties"/>
+            <fileset dir="${conf.dir}" includes="*.xml, jg-messages*.properties, VERSION.properties"/>
             <fileset dir="${compile.dir}/schema">
                 <include name="*.xsd"/>
             </fileset>
@@ -336,8 +340,6 @@
     </target>
 
 
-
-    <!-- generate java doc -->
     <target name="javadoc"
             depends="prepare,check-javadoc" unless="javadoc.exists"
             description="Creates Javadoc documentation in ./dist/javadoc">
@@ -349,7 +351,7 @@
                  author="true"
                  version="true"
                  use="true"
-                 bottom="Copyright &#169; 1998-2014 Bela Ban / Red Hat. All Rights Reserved."
+                 bottom="Copyright &#169; 1998-2020 Red Hat. All Rights Reserved."
                  useexternalfile="yes"
                  doctitle="JGroups"
                  overview="${src.dir}/org/jgroups/overview.html">
@@ -442,6 +444,16 @@
         <echo message="manual.up-to-date=${manual.up-to-date}"/>
     </target>
 
+    <target name="make-pom" description="Copies conf/pom-xml.template to pom.xml and replaces version">
+        <copy file="${pom.template}"
+              tofile="${root.dir}/pom.xml"
+              overwrite="false" verbose="false">
+            <filterset>
+                <filter token="VERSION" value="${version}"/>
+            </filterset>
+        </copy>
+    </target>
+
     <target name="make-schema" description="Creates XML schema for this version of JGroups"
             depends="create-schema">
     </target>
@@ -475,6 +487,7 @@
         <delete dir="${root.dir}/target" failonerror="false"/>
         <delete dir="${keystore.dir}" failonerror="false"/>
         <delete file="${root.dir}/velocity.log*" failonerror="false"/>
+        <delete file="${root.dir}/pom.xml" failonerror="false"/>
         <delete file="${conf.dir}/MANIFEST.MF" failonerror="false"/>
         <delete>
             <fileset dir="${root.dir}" defaultexcludes="no">
