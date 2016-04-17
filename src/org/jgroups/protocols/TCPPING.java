@@ -122,10 +122,8 @@ public class TCPPING extends Discovery {
 
     public void discoveryRequestReceived(Address sender, String logical_name, PhysicalAddress physical_addr) {
         super.discoveryRequestReceived(sender, logical_name, physical_addr);
-        if(physical_addr != null) {
-            if(!initial_hosts.contains(physical_addr))
-                dynamic_hosts.addIfAbsent(physical_addr);
-        }
+        if(physical_addr != null && !initial_hosts.contains(physical_addr))
+            dynamic_hosts.addIfAbsent(physical_addr);
     }
 
     @Override
@@ -136,16 +134,17 @@ public class TCPPING extends Discovery {
         PingData data=new PingData(local_addr, false, org.jgroups.util.UUID.get(local_addr), physical_addr);
         PingHeader hdr=new PingHeader(PingHeader.GET_MBRS_REQ).clusterName(cluster_name);
 
-        Set<PhysicalAddress> cluster_members=new HashSet<>(initial_hosts);
-        cluster_members.addAll(dynamic_hosts);
+        List<PhysicalAddress> cluster_members=new ArrayList<>(initial_hosts.size() + (dynamic_hosts != null? dynamic_hosts.size() : 0) + 5);
+        initial_hosts.stream().filter(phys_addr -> !cluster_members.contains(phys_addr)).forEach(cluster_members::add);
+
+        if(dynamic_hosts != null)
+            dynamic_hosts.stream().filter(phys_addr -> !cluster_members.contains(phys_addr)).forEach(cluster_members::add);
 
         if(use_disk_cache) {
             // this only makes sense if we have PDC below us
             Collection<PhysicalAddress> list=(Collection<PhysicalAddress>)down_prot.down(new Event(Event.GET_PHYSICAL_ADDRESSES));
             if(list != null)
-                for(PhysicalAddress phys_addr: list)
-                    if(!cluster_members.contains(phys_addr))
-                        cluster_members.add(phys_addr);
+                list.stream().filter(phys_addr -> !cluster_members.contains(phys_addr)).forEach(cluster_members::add);
         }
 
         for(final PhysicalAddress addr: cluster_members) {
@@ -157,11 +156,9 @@ public class TCPPING extends Discovery {
               .putHeader(this.id,hdr).setBuffer(marshal(data));
 
             if(async_discovery_use_separate_thread_per_request) {
-                timer.execute(new Runnable() {
-                    public void run() {
-                        log.trace("%s: sending discovery request to %s", local_addr, msg.getDest());
-                        down_prot.down(new Event(Event.MSG, msg));
-                    }
+                timer.execute(() -> {
+                    log.trace("%s: sending discovery request to %s", local_addr, msg.getDest());
+                    down_prot.down(new Event(Event.MSG, msg));
                 });
             }
             else {

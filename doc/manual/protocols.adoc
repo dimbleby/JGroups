@@ -125,6 +125,32 @@ ${BasicTCP}
 
 ${TCP}
 
+
+[[TCP_NIO2]]
+==== TCP_NIO2
+
+TCP_NIO2 is similar to <<TCP>>, but uses NIO (= Non blocking IO) to send messages to and receive messages
+from members. Contrary to TCP, it doesn't use 1 thread per connection, but handles accepts, connects, reads and
+writes in a *single thread*.
+
+All of these operations are guaranteed to never block.
+
+For example, if a read is supposed to receive 1000 bytes and only reveived 700, the read reads the 700 bytes, saves
+them somewhere and later - when the remaining 300 bytes have been received - is notified to complete the read
+and then returns the 1000 bytes to the application.
+
+Using a single thread is not a problem, as operations will never block. The only potentially blocking operation,
+namely delivering messages up to the application, is done via the regular or OOB thread pools, as usual.
+
+While <<TCP>> and <<TCP_NIO2>> both have the N-1 problem of sending cluster wide messages (contrary to <<UDP>>),
+TCP_NIO2 is able to handle a larger number of connections than TCP, as it doesn't use the thread-per-connection model,
+and - contrary to TCP, but similar to UDP - it doesn't block when sending or receiving messages.
+
+${BasicTCP}
+
+${TCP_NIO2}
+
+
 [[TUNNEL]]
 
 
@@ -752,7 +778,7 @@ Periodically, we check for expired members whose timestamp is greater than the t
 * Every member also checks every 2 seconds if any member's timestamp exceeds the timeout and suspects
   that member if this is the case
 * Now C and D crash at the same time
-* After roughly 12-13 seconds, `A`, `B` and `E` broadcast a `SUSPECT(C,D)` message
+* After roughly 12-13 seconds, `A` broadcasts a `SUSPECT(C,D)` message
 * The coordinator (`A`) uses `VERIFY_SUSPECT` to double check if `C` and `D` are dead
 * `A` creates a new view `{A,B,E}` which excludes `C` and `D`
 
@@ -1647,6 +1673,16 @@ The +mech+ property specifies the SASL mech you want to use, as defined by RFC-4
                     callback handlers, one used when the node is running as coordinator (++$$server_callback_handler$$++) and one used in all other 
                     cases (++$$client_callback_handler$$++). Refer to the JDK's SASL reference guide for more details: link:$$http://docs.oracle.com/javase/7/docs/technotes/guides/security/sasl/sasl-refguide.html$$[] 
                 
+The JGroups package comes with a simple properties-based CallbackHandler which can be used when a more complex Kerberos/LDAP approach is not needed. To use this set both the (++$$server_callback_handler$$++) and
+                    the (++$$client_callback_handler$$++) to org.jgroups.auth.sasl.SimpleAuthorizingCallbackHandler. This CallbackHandler can be configured either programmatically by passing to the constructor an
+                    instance of java.util.Properties containing the appropriate properties, or via standard Java system properties (i.e. set on the command-line using the -DpropertyName=propertyValue notation.
+                    The following properties are available:
+
+* sasl.credentials.properties - the path to a property file which contains principal/credential mappings represented as principal=password
+* sasl.local.principal - the name of the principal that is used to identify the local node. It must exist in the sasl.credentials.properties file
+* sasl.roles.properties - (optional) the path to a property file which contains principal/roles mappings represented as principal=role1,role2,role3
+* sasl.role - (optional) if present, authorizes joining nodes only if their principal is
+* sasl.realm - (optional) the name of the realm to use for the SASL mechanisms that require it
 
 ${SASL}
 
@@ -1674,7 +1710,7 @@ As discussed in <<Scopes>>, the SCOPE protocol is used to deliver updates
 SCOPE has a separate thread pool. The reason why the default thread pool from the transport wasn't used
                 is that the default thread pool has a different purpose. For example, it can use a queue to which all
                 incoming messages are added, which would defy the purpose of concurrent delivery in SCOPE. As a matter
-                of fact, using a queue would most likely delay messages get sent up into SCOPE !
+                of fact, using a queue would most likely delay messages get sent up into SCOPE!
             
 
 Also, the default pool's rejection policy might not be "run", so the SCOPE implementation would have

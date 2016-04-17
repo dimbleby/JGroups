@@ -16,11 +16,11 @@ public class DefaultThreadFactory implements ThreadFactory {
     protected final String  baseName;
     protected final boolean createDaemons;
     protected final boolean use_numbering;
-    protected short         counter=0; // if numbering is enabled
-    protected boolean       includeClusterName=false;
-    protected String        clusterName=null;
-    protected boolean       includeLocalAddress=false;
-    protected String        address=null;
+    protected short         counter; // if numbering is enabled
+    protected boolean       includeClusterName;
+    protected String        clusterName;
+    protected boolean       includeLocalAddress;
+    protected String        address;
 
 
 
@@ -60,10 +60,6 @@ public class DefaultThreadFactory implements ThreadFactory {
 
     public Thread newThread(Runnable r) {
         return newThread(r, baseName, null, null);
-    }
-
-    public Thread newThread(ThreadGroup group, Runnable r, String name) {
-        return newThread(r, name, null, null);
     }
 
     protected Thread newThread(Runnable r,

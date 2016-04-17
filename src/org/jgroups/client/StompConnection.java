@@ -1,20 +1,22 @@
 package org.jgroups.client;
 
 import org.jgroups.annotations.Experimental;
-import org.jgroups.annotations.Unsupported;
 import org.jgroups.logging.Log;
 import org.jgroups.logging.LogFactory;
 import org.jgroups.protocols.STOMP;
 import org.jgroups.util.Util;
 
+import javax.net.SocketFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocketFactory;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.net.*;
-import javax.net.SocketFactory;
-import javax.net.ssl.SSLSocketFactory;
-import javax.net.ssl.SSLContext;
-import java.util.*;
+import java.net.Socket;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * STOMP client to access the STOMP [1] protocol. Note that the full STOMP protocol is not implemented, e.g. transactions
@@ -142,7 +144,7 @@ public class StompConnection implements Runnable {
             }
         }
         catch(IOException ex) {
-            log.error("failed to send connect message:", ex);
+            log.error(Util.getMessage("FailedToSendConnectMessage"), ex);
         }
     }
 
@@ -158,9 +160,8 @@ public class StompConnection implements Runnable {
 
     protected void sendSubscribe(String destination) {
         StringBuilder sb=new StringBuilder();
-        sb.append(STOMP.ClientVerb.SUBSCRIBE.name()).append("\n");
-        sb.append("destination: ").append(destination).append("\n");
-        sb.append("\n");
+        sb.append(STOMP.ClientVerb.SUBSCRIBE.name()).append("\n").append("destination: ")
+                .append(destination).append("\n\n");
 
         try {
             synchronized(this) {
@@ -170,7 +171,7 @@ public class StompConnection implements Runnable {
             }
         }
         catch(IOException ex) {
-            log.error("failed subscribing to " + destination + ": ", ex);
+            log.error(Util.getMessage("FailedSubscribingTo") + destination + ": ", ex);
         }
     }
 
@@ -186,9 +187,8 @@ public class StompConnection implements Runnable {
 
     protected void sendUnsubscribe(String destination) {
         StringBuilder sb=new StringBuilder();
-        sb.append(STOMP.ClientVerb.UNSUBSCRIBE.name()).append("\n");
-        sb.append("destination: ").append(destination).append("\n");
-        sb.append("\n");
+        sb.append(STOMP.ClientVerb.UNSUBSCRIBE.name()).append("\n")
+                .append("destination: ").append(destination).append("\n\n");
 
         try {
             synchronized(this) {
@@ -198,7 +198,7 @@ public class StompConnection implements Runnable {
             }
         }
         catch(IOException ex) {
-            log.error("failed unsubscribing from " + destination + ": ", ex);
+            log.error(Util.getMessage("FailedUnsubscribingFrom") + destination + ": ", ex);
         }
     }
 
@@ -225,7 +225,7 @@ public class StompConnection implements Runnable {
             }
         }
         catch (IOException e) {
-            log.error("failed sending message to " + destination + ": ", e);
+            log.error(Util.getMessage("FailedSendingMessageTo") + destination + ": ", e);
         }
     }
 
@@ -251,7 +251,7 @@ public class StompConnection implements Runnable {
                 if (!isConnected() && reconnect) {
                     log.info("Reconnecting in "+timeout+"s.");
                     try {
-                        Thread.sleep(timeout * 1000);
+                        Thread.sleep((long)timeout * 1000);
                     }
                     catch (InterruptedException e1) {
                         // pass
@@ -266,9 +266,7 @@ public class StompConnection implements Runnable {
                         continue;
                     }
 
-                    for (ConnectionCallback cb : callbacks) {
-                        cb.onConnect();
-                    }
+                    callbacks.forEach(ConnectionCallback::onConnect);
                 }
 
                 STOMP.Frame frame=STOMP.readFrame(in);
@@ -312,7 +310,7 @@ public class StompConnection implements Runnable {
                 timeout = 0;
             }
             catch(IOException e) {
-                log.error("Connection closed unexpectedly:", e);
+                log.error(Util.getMessage("ConnectionClosedUnexpectedly"), e);
                 if (reconnect) {
                     closeConnections();
                 }
@@ -321,7 +319,7 @@ public class StompConnection implements Runnable {
                 }
             }
             catch(Throwable t) {
-                log.error("failure reading frame", t);
+                log.error(Util.getMessage("FailureReadingFrame"), t);
             }
         }
     }
@@ -332,7 +330,7 @@ public class StompConnection implements Runnable {
                 listener.onMessage(headers, buf, offset, length);
             }
             catch(Throwable t) {
-                log.error("failed calling listener", t);
+                log.error(Util.getMessage("FailedCallingListener"), t);
             }
         }
     }
@@ -343,7 +341,7 @@ public class StompConnection implements Runnable {
                 listener.onInfo(info);
             }
             catch(Throwable t) {
-                log.error("failed calling listener", t);
+                log.error(Util.getMessage("FailedCallingListener"), t);
             }
         }
     }
@@ -355,16 +353,14 @@ public class StompConnection implements Runnable {
                     connectToDestination(dest);
                     sendConnect();
                 }
-                for(String subscription: subscriptions) {
-                    sendSubscribe(subscription);
-                }
+                subscriptions.forEach(this::sendSubscribe);
 
                 log.info("Connected to " + dest);
                 break;
             }
             catch(IOException ex) {
                 if(log.isErrorEnabled())
-                    log.error("failed connecting to " + dest + ":" + ex);
+                    log.error(Util.getMessage("FailedConnectingTo") + dest + ":" + ex);
                 closeConnections();
             }
         }
@@ -381,7 +377,7 @@ public class StompConnection implements Runnable {
 
     protected void connectToDestination(String dest) throws IOException {
         // parse destination
-        int index=dest.lastIndexOf(":");
+        int index=dest.lastIndexOf(':');
         String host=dest.substring(0, index);
         int port=Integer.parseInt(dest.substring(index+1));
 
@@ -406,12 +402,12 @@ public class StompConnection implements Runnable {
         return sock != null && sock.isConnected() && !sock.isClosed();
     }
 
-    public static interface Listener {
+    public interface Listener {
         void onMessage(Map<String,String> headers, byte[] buf, int offset, int length);
         void onInfo(Map<String,String> information);
     }
 
-    public static interface ConnectionCallback {
+    public interface ConnectionCallback {
         void onConnect();
     }
 

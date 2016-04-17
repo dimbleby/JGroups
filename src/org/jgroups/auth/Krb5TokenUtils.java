@@ -4,12 +4,14 @@ import org.ietf.jgss.*;
 import org.jgroups.logging.Log;
 import org.jgroups.logging.LogFactory;
 import org.jgroups.util.Bits;
+import org.jgroups.util.Util;
 
 import javax.security.auth.Subject;
 import javax.security.auth.callback.*;
 import javax.security.auth.login.LoginContext;
 import javax.security.auth.login.LoginException;
 import javax.xml.bind.DatatypeConverter;
+
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
@@ -30,7 +32,7 @@ public class Krb5TokenUtils {
         try {
             krb5Oid = new Oid("1.2.840.113554.1.2.2");
         } catch(Exception e) {
-            log.error("Exception was generated while creating an Oid instance", e);
+            log.error(Util.getMessage("ExceptionWasGeneratedWhileCreatingAnOidInstance"), e);
             // Set to null to use the default mechanism.
             krb5Oid = null;
         }
@@ -66,19 +68,17 @@ public class Krb5TokenUtils {
 
         // The GSS context initiation has to be performed as a privileged action.
         return Subject.doAs(subject,
-                            new PrivilegedAction<byte[]>() {
-                                public byte[] run() {
-                                    try {
-                                        byte[] token = new byte[0];
-                                        // This is a one pass context initialization.
-                                        context.requestMutualAuth(false);
-                                        context.requestCredDeleg(false);
-                                        return context.initSecContext(token, 0,
-                                                                      token.length);
-                                    } catch (GSSException e) {
-                                        log.error("Krb5Token Kerberos context processing exception",e);
-                                        return null;
-                                    }
+                            (PrivilegedAction<byte[]>)() -> {
+                                try {
+                                    byte[] token = new byte[0];
+                                    // This is a one pass context initialization.
+                                    context.requestMutualAuth(false);
+                                    context.requestCredDeleg(false);
+                                    return context.initSecContext(token, 0,
+                                                                  token.length);
+                                } catch (GSSException e) {
+                                    log.error(Util.getMessage("Krb5TokenKerberosContextProcessingException"),e);
+                                    return null;
                                 }
                             });
     }
@@ -87,19 +87,17 @@ public class Krb5TokenUtils {
     public static String validateSecurityContext(Subject subject, final byte[] serviceTicket) throws GSSException {
 
         // Accept the context and return the client principal name.
-        return Subject.doAs(subject, new PrivilegedAction<String>() {
-            public String run() {
-                try {
-                    // Identify the server that communications are being made
-                    // to.
-                    GSSManager manager = GSSManager.getInstance();
-                    GSSContext context = manager.createContext((GSSCredential) null);
-                    context.acceptSecContext(serviceTicket, 0, serviceTicket.length);
-                    return context.getSrcName().toString();
-                } catch (Exception e) {
-                    log.error("Krb5Token Kerberos context processing exception",e);
-                    return null;
-                }
+        return Subject.doAs(subject, (PrivilegedAction<String>)() -> {
+            try {
+                // Identify the server that communications are being made
+                // to.
+                GSSManager manager = GSSManager.getInstance();
+                GSSContext context = manager.createContext((GSSCredential) null);
+                context.acceptSecContext(serviceTicket, 0, serviceTicket.length);
+                return context.getSrcName().toString();
+            } catch (Exception e) {
+                log.error(Util.getMessage("Krb5TokenKerberosContextProcessingException"),e);
+                return null;
             }
         });
     }

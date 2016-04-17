@@ -1,5 +1,6 @@
 package org.jgroups.protocols.relay;
 
+import org.jgroups.Address;
 import org.jgroups.util.AsciiString;
 import org.jgroups.util.ExtendedUUID;
 import org.jgroups.util.UUID;
@@ -13,8 +14,8 @@ import java.util.Arrays;
  * @since 3.2
  */
 public class SiteUUID extends ExtendedUUID implements SiteAddress {
-    protected static final byte[] NAME      = Util.stringToBytes("name"); // logical name, can be null
-    protected static final byte[] SITE_NAME = Util.stringToBytes("site");
+    protected static final byte[] NAME      = Util.stringToBytes("relay2.name"); // logical name, can be null
+    protected static final byte[] SITE_NAME = Util.stringToBytes("relay2.site");
     private static final long     serialVersionUID=7128439052905502361L;
 
 
@@ -59,6 +60,16 @@ public class SiteUUID extends ExtendedUUID implements SiteAddress {
         return print(false);
     }
 
+    @Override
+    public int compareTo(Address other) {
+        if (other instanceof SiteUUID) {
+            int siteCompare = Util.compare(get(SITE_NAME), ((SiteUUID) other).get(SITE_NAME));
+            //compareTo will check the bits.
+            return siteCompare == 0 ? super.compareTo(other) : siteCompare;
+        }
+        return super.compareTo(other);
+    }
+
     public String print(boolean detailed) {
         String name=getName();
         String retval=name != null? name : get(this);
@@ -78,19 +89,11 @@ public class SiteUUID extends ExtendedUUID implements SiteAddress {
             byte[] val=values[i];
             Object obj=null;
             try {
-                obj=Util.objectFromByteBuffer(val);
+                obj=Util.bytesToString(val);
             }
             catch(Throwable t) {
+                obj=val != null? val.length + " bytes" : null;
             }
-            if(obj == null) {
-                try {
-                    obj=Util.bytesToString(val);
-                }
-                catch(Throwable t) {
-                    obj=val != null? val.length + " bytes" : null;
-                }
-            }
-
             sb.append(", ").append(new AsciiString(key)).append("=").append(obj);
         }
         return sb.toString();

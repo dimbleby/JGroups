@@ -40,7 +40,7 @@ public class UPerf extends ReceiverAdapter {
 
 
     // ============ configurable properties ==================
-    @Property protected boolean sync=true, oob=false;
+    @Property protected boolean sync=true, oob=true;
     @Property protected int     num_threads=25;
     @Property protected int     num_msgs=20000, msg_size=1000;
     @Property protected int     anycast_count=2;
@@ -51,7 +51,7 @@ public class UPerf extends ReceiverAdapter {
     // ... add your own here, just don't forget to annotate them with @Property
     // =======================================================
 
-    private static final Method[] METHODS=new Method[16];
+    private static final Method[] METHODS=new Method[6];
     private static final short START                 =  0;
     private static final short GET                   =  1;
     private static final short PUT                   =  2;
@@ -85,23 +85,14 @@ public class UPerf extends ReceiverAdapter {
 
 
     public void init(String props, String name, boolean xsite, AddressGenerator generator, int bind_port) throws Throwable {
-        channel=new JChannel(props);
-        if(generator != null)
-            channel.addAddressGenerator(generator);
-        if(name != null)
-            channel.setName(name);
-
+        channel=new JChannel(props).addAddressGenerator(generator).setName(name);
         if(bind_port > 0) {
             TP transport=channel.getProtocolStack().getTransport();
             transport.setBindPort(bind_port);
         }
 
-        disp=new RpcDispatcher(channel, null, this, this);
-        disp.setMethodLookup(new MethodLookup() {
-            public Method findMethod(short id) {
-                return METHODS[id];
-            }
-        });
+        disp=new RpcDispatcher(channel, this).setMembershipListener(this).setMethodLookup(id -> METHODS[id])
+          .setMarshaller(new UPerfMarshaller());
         channel.connect(groupname);
         local_addr=channel.getAddress();
 
@@ -177,11 +168,8 @@ public class UPerf extends ReceiverAdapter {
     }
 
     protected void addSiteMastersToMembers() {
-        if(!site_masters.isEmpty()) {
-            for(Address sm: site_masters)
-                if(!members.contains(sm))
-                    members.add(sm);
-        }
+        if(!site_masters.isEmpty())
+            site_masters.stream().filter(sm -> !members.contains(sm)).forEach(members::add);
     }
 
     // =================================== callbacks ======================================
@@ -215,7 +203,7 @@ public class UPerf extends ReceiverAdapter {
     }
 
     public void quitAll() {
-        Util.sleepRandom(10, 10000);
+        // Util.sleepRandom(10, 10000);
         System.out.println("-- received quitAll(): shutting down");
         stopEventThread();
     }
@@ -231,11 +219,12 @@ public class UPerf extends ReceiverAdapter {
         }
     }
 
-    public byte[] get(long key) {
+    public byte[] get(@SuppressWarnings("UnusedParameters") long key) {
         return BUFFER;
     }
 
 
+    @SuppressWarnings("UnusedParameters")
     public void put(long key, byte[] val) {
     }
 
@@ -322,8 +311,8 @@ public class UPerf extends ReceiverAdapter {
                     return;
                 case 'X':
                     try {
-                        RequestOptions options=new RequestOptions(ResponseMode.GET_NONE, 0).setExclusionList(local_addr);
-                        options.setFlags(Message.Flag.OOB, Message.Flag.DONT_BUNDLE, Message.Flag.NO_FC);
+                        RequestOptions options=new RequestOptions(ResponseMode.GET_NONE, 0); // .setExclusionList(local_addr);
+                        options.flags(Message.Flag.OOB, Message.Flag.DONT_BUNDLE, Message.Flag.NO_FC);
                         disp.callRemoteMethods(null, new MethodCall(QUIT_ALL), options);
                     }
                     catch(Throwable t) {
@@ -345,7 +334,7 @@ public class UPerf extends ReceiverAdapter {
         RspList<Results> responses=null;
         try {
             RequestOptions options=new RequestOptions(ResponseMode.GET_ALL, 0);
-            options.setFlags(Message.Flag.OOB, Message.Flag.DONT_BUNDLE, Message.Flag.NO_FC);
+            options.flags(Message.Flag.OOB, Message.Flag.DONT_BUNDLE, Message.Flag.NO_FC);
             responses=disp.callRemoteMethods(null, new MethodCall(START), options);
         }
         catch(Throwable t) {
@@ -415,8 +404,8 @@ public class UPerf extends ReceiverAdapter {
     }
 
     protected static List<String> getSites(JChannel channel) {
-        RELAY2 relay=(RELAY2)channel.getProtocolStack().findProtocol(RELAY2.class);
-        return relay != null? relay.siteNames() : new ArrayList<String>(0);
+        RELAY2 relay=channel.getProtocolStack().findProtocol(RELAY2.class);
+        return relay != null? relay.siteNames() : new ArrayList<>(0);
     }
 
     /** Picks the next member in the view */
@@ -432,6 +421,27 @@ public class UPerf extends ReceiverAdapter {
             return null;
         }
     }
+
+    protected class UPerfMarshaller implements Marshaller {
+        public int estimatedSize(Object arg) {
+            if(arg == null)
+                return 2;
+            if(arg instanceof byte[])
+                return msg_size;
+            if(arg instanceof Long)
+                return 10;
+            return 50;
+        }
+
+        public void objectToStream(Object obj, DataOutput out) throws Exception {
+            Util.objectToStream(obj, out);
+        }
+
+        public Object objectFromStream(DataInput in) throws Exception {
+            return Util.objectFromStream(in);
+        }
+    }
+
 
     private class Invoker extends Thread {
         private final List<Address>  dests=new ArrayList<>();
@@ -465,12 +475,12 @@ public class UPerf extends ReceiverAdapter {
             RequestOptions get_before_put_options=new RequestOptions(ResponseMode.GET_FIRST, 40000, true, null, Message.Flag.DONT_BUNDLE, Message.Flag.OOB);
 
             if(oob) {
-                get_options.setFlags(Message.Flag.OOB);
-                put_options.setFlags(Message.Flag.OOB);
+                get_options.flags(Message.Flag.OOB);
+                put_options.flags(Message.Flag.OOB);
             }
             if(!msg_bundling) {
-                get_options.setFlags(Message.Flag.DONT_BUNDLE);
-                put_options.setFlags(Message.Flag.DONT_BUNDLE);
+                get_options.flags(Message.Flag.DONT_BUNDLE);
+                put_options.flags(Message.Flag.DONT_BUNDLE);
             }
             if(use_anycast_addrs)
                 put_options.useAnycastAddresses(true);
@@ -487,7 +497,7 @@ public class UPerf extends ReceiverAdapter {
                 try {
                     if(get) { // sync GET
                         Address target=pickTarget();
-                        if(target != null && target.equals(local_addr)) {
+                        if(Objects.equals(target, local_addr)) {
                             get(1);
                         }
                         else {

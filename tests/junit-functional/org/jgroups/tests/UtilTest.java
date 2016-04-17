@@ -2,11 +2,13 @@
 package org.jgroups.tests;
 
 import org.jgroups.*;
+import org.jgroups.util.Bits;
 import org.jgroups.util.*;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
 import java.io.*;
+import java.nio.ByteBuffer;
 import java.util.*;
 
 
@@ -135,9 +137,14 @@ public class UtilTest {
         }
     }
 
+    public void testTossWeightedCoin() {
+        boolean rc=Util.tossWeightedCoin(1.0);
+        assert true;
+        rc=Util.tossWeightedCoin(0.0);
+        assert !rc;
+    }
 
-
-    public static void testPrintBytes() {
+    public void testPrintBytes() {
         long num;
         String s;
 
@@ -208,6 +215,29 @@ public class UtilTest {
     }
 
 
+    public void testProductBiggerThan() {
+        boolean rc=Util.productGreaterThan(3, 4, 12);
+        assert !rc;
+        rc=Util.productGreaterThan(3, 4, 11);
+        assert rc;
+
+        long n2=Short.MAX_VALUE/2;
+        rc=Util.productGreaterThan(2, n2, Short.MAX_VALUE);
+        assert !rc;
+        n2++;
+        rc=Util.productGreaterThan(2, n2, Short.MAX_VALUE);
+        assert rc;
+
+        n2=Long.MAX_VALUE/10;
+        rc=Util.productGreaterThan(9, n2, Long.MAX_VALUE);
+        assert !rc;
+        rc=Util.productGreaterThan(10, n2, Long.MAX_VALUE);
+        assert !rc;
+        rc=Util.productGreaterThan(11, n2, Long.MAX_VALUE);
+        assert rc;
+    }
+
+
     public static void testReadBytes() {
         assert 10 == Util.readBytesInteger("10");
         assert 10 == Util.readBytesInteger("10 ");
@@ -260,7 +290,7 @@ public class UtilTest {
     }
 
     @SuppressWarnings("unchecked")
-    public static void testObjectToFromByteBuffer() throws Exception {
+    public void testObjectToFromByteBuffer() throws Exception {
         byte[] buf;
         Address addr=Util.createRandomAddress(), addr2;
         List<String> list=new ArrayList<>(), list2;
@@ -268,19 +298,19 @@ public class UtilTest {
         list.add("Jeannette");
 
         buf=Util.objectToByteBuffer(addr);
-        addr2=(Address)Util.objectFromByteBuffer(buf);
+        addr2=Util.objectFromByteBuffer(buf);
         System.out.println("addr=" + addr + ", addr2=" + addr2);
         Assert.assertEquals(addr, addr2);
 
         buf=Util.objectToByteBuffer(list);
-        list2=(List<String>)Util.objectFromByteBuffer(buf);
+        list2=Util.objectFromByteBuffer(buf);
         System.out.println("list=" + list + ", list2=" + list2);
         Assert.assertEquals(list, list2);
 
         byte[] buffer={'B', 'e', 'l', 'a', ' ', 'B', 'a', 'n'};
         buf=Util.objectToByteBuffer(buffer);
 
-        byte[] buffer2=(byte[])Util.objectFromByteBuffer(buf);
+        byte[] buffer2=Util.objectFromByteBuffer(buf);
         assert buffer2 != null && buffer.length == buffer2.length;
         assert Arrays.equals(buffer, buffer2);
 
@@ -292,23 +322,38 @@ public class UtilTest {
         assert obj == null;
 
         Object[] values={
-                Boolean.TRUE,
-                Boolean.FALSE,
-                new Byte((byte)22),
-                new Byte("2"),
-                new Character('5'),
-                new Double(3.14),
-                new Float(352.3),
-                new Integer(100),
-                new Long(322649),
-                new Short((short)22),
-                "Bela Ban"
+          Boolean.TRUE,
+          true,
+          false,
+          Boolean.FALSE,
+          (byte)22,
+          new Byte("2"),
+          '5',
+          3.14,
+          352.3f,
+          0,
+          100,
+          322649,
+          Integer.MAX_VALUE,
+          Integer.MIN_VALUE,
+          0L,
+          322649L,
+          Long.MAX_VALUE-50,
+          Long.MAX_VALUE,
+          Long.MIN_VALUE,
+          (short)22,
+          Short.MAX_VALUE,
+          Short.MIN_VALUE,
+          "Bela Ban",
+          new byte[]{'H', 'e', 'l', 'l', 'o'},
+          Util.generateArray(1024)
         };
         for(int i=0; i < values.length; i++) {
             Object value=values[i];
             marshal(value);
         }
     }
+
 
 
     public static void testMessageToByteBuffer() throws Exception {
@@ -331,10 +376,10 @@ public class UtilTest {
         byte[] tmp={'B', 'e', 'l', 'a'};
         String str=new String(tmp);
         byte[] buf=Util.objectToByteBuffer(str);
-        String str2=(String)Util.objectFromByteBuffer(buf);
+        String str2=Util.objectFromByteBuffer(buf);
         assert str.equals(str2);
         tmp[1]='a';
-        str2=(String)Util.objectFromByteBuffer(buf);
+        str2=Util.objectFromByteBuffer(buf);
         assert str.equals(str2);
     }
 
@@ -359,12 +404,68 @@ public class UtilTest {
     }
 
 
+    public void testExceptionToStream() throws Exception {
+        ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(512, true);
+        Throwable cause=new IllegalArgumentException("this is highly illegal!");
+        NullPointerException ex=new NullPointerException("boom");
+        ex.initCause(cause);
+        int stack_len=ex.getStackTrace().length;
+
+        Util.exceptionToStream(ex, out);
+
+        ByteArrayDataInputStream in=new ByteArrayDataInputStream(out.buffer(), 0, out.position());
+        Throwable new_ex=Util.exceptionFromStream(in);
+        int new_stack_len=new_ex.getStackTrace().length;
+
+
+        assert new_ex instanceof NullPointerException;
+        assert new_ex.getMessage().equals("boom");
+        assert new_ex.getStackTrace().length > 0;
+        assert new_stack_len == stack_len;
+
+        Throwable new_cause=new_ex.getCause();
+        assert new_cause instanceof IllegalArgumentException;
+        assert new_cause.getMessage().startsWith("this is highly");
+    }
+
+
+    protected static class MyNioReceiver extends org.jgroups.blocks.cs.ReceiverAdapter {
+        protected String name;
+
+        @Override
+        public void receive(Address sender, byte[] buf, int offset, int length) {
+            name=new String(buf, offset, length);
+        }
+
+        @Override
+        public void receive(Address sender, ByteBuffer buf) {
+            Util.bufferToArray(sender, buf, this);
+        }
+    }
+
+    public void testBufferToArray() {
+        // test heap based ByteBuffer:
+        String hello="hello";
+        byte[] buffer=hello.getBytes();
+        ByteBuffer buf=(ByteBuffer)ByteBuffer.allocate(50).putInt(322649).put(buffer).flip();
+        buf.getInt();
+        MyNioReceiver receiver=new MyNioReceiver();
+        receiver.receive(null, buf);
+        assert receiver.name.equals(hello);
+
+        // test direct ByteBuffer:
+        buf=(ByteBuffer)ByteBuffer.allocateDirect(50).putInt(322649).put(buffer).flip();
+        buf.getInt();
+        receiver.receive(null, buf);
+        assert receiver.name.equals(hello);
+    }
+
     private static void marshalString(int size) throws Exception {
         byte[] tmp=new byte[size];
         String str=new String(tmp, 0, tmp.length);
         byte[] retval=Util.objectToByteBuffer(str);
         System.out.println("length=" + retval.length + " bytes");
-        String obj=(String)Util.objectFromByteBuffer(retval);
+        String obj=Util.objectFromByteBuffer(retval);
         System.out.println("read " + obj.length() + " string");
     }
 
@@ -377,6 +478,19 @@ public class UtilTest {
         Object obj2=Util.objectFromByteBuffer(buf);
         System.out.println("obj=" + obj + ", obj2=" + obj2 + " (type=" + obj.getClass().getName() + ", length=" + buf.length + " bytes)");
         Assert.assertEquals(obj, obj2);
+
+        if(obj instanceof Integer) { // test compressed ints and longs
+            buf=new byte[10];
+            Bits.writeIntCompressed((int)obj, buf, 0);
+            obj2=Bits.readIntCompressed(buf, 0);
+            assert obj.equals(obj2);
+        }
+        if(obj instanceof Long) { // test compressed ints and longs
+            buf=new byte[10];
+            Bits.writeLongCompressed((long)obj, buf, 0);
+            obj2=Bits.readLongCompressed(buf, 0);
+            assert obj.equals(obj2);
+        }
     }
 
 
@@ -391,8 +505,8 @@ public class UtilTest {
         byte[] buf=outstream.toByteArray();
         ByteArrayInputStream instream=new ByteArrayInputStream(buf);
         DataInputStream dis=new DataInputStream(instream);
-        Message m2=(Message)Util.readGenericStreamable(dis);
-        ViewId v3=(ViewId)Util.readGenericStreamable(dis);
+        Message m2=Util.readGenericStreamable(dis);
+        ViewId v3=Util.readGenericStreamable(dis);
         assert m2.getBuffer() != null;
         Assert.assertEquals(m.getLength(), m2.getLength());
         assert v3 != null;
@@ -420,9 +534,9 @@ public class UtilTest {
         byte[] buf=outstream.toByteArray();
         ByteArrayInputStream instream=new ByteArrayInputStream(buf);
         DataInputStream dis=new DataInputStream(instream);
-        View v2=(View)Util.readGenericStreamable(dis);
+        View v2=Util.readGenericStreamable(dis);
         Assert.assertEquals(v, v2);
-        v2=(View)Util.readStreamable(View.class, dis);
+        v2=Util.readStreamable(View.class, dis);
         Assert.assertEquals(v, v2);
     }
 
@@ -952,6 +1066,7 @@ public class UtilTest {
         assert method_name.equals(expected_output) :
                 "attrname=" + input + ", method name=" + method_name + ", expected output=" + expected_output;
     }
+
 
 }
 

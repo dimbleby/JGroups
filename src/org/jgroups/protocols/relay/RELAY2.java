@@ -5,7 +5,6 @@ import org.jgroups.annotations.*;
 import org.jgroups.conf.ConfiguratorFactory;
 import org.jgroups.protocols.FORWARD_TO_COORD;
 import org.jgroups.protocols.relay.config.RelayConfig;
-import org.jgroups.stack.AddressGenerator;
 import org.jgroups.stack.Protocol;
 import org.jgroups.util.*;
 import org.jgroups.util.UUID;
@@ -242,8 +241,7 @@ public class RELAY2 extends Protocol {
         site_config=sites.get(site);
         if(site_config == null)
             throw new Exception("site configuration for \"" + site + "\" not found in " + config);
-        if(log.isTraceEnabled())
-            log.trace(local_addr + ": site configuration:\n" + site_config);
+        log.trace(local_addr + ": site configuration:\n" + site_config);
 
         if(!site_config.getForwards().isEmpty())
             log.warn(local_addr + ": forwarding routes are currently not supported and will be ignored. This will change " +
@@ -257,13 +255,11 @@ public class RELAY2 extends Protocol {
 
         if(enable_address_tagging) {
             JChannel ch=getProtocolStack().getChannel();
-            ch.addAddressGenerator(new AddressGenerator() {
-                public Address generateAddress() {
-                    ExtendedUUID retval=ExtendedUUID.randomUUID();
-                    if(can_become_site_master)
-                        retval.setFlag(ExtendedUUID.can_become_site_master);
-                    return retval;
-                }
+            ch.addAddressGenerator(() -> {
+                ExtendedUUID retval=ExtendedUUID.randomUUID();
+                if(can_become_site_master)
+                    retval.setFlag(ExtendedUUID.can_become_site_master);
+                return retval;
             });
         }
 
@@ -274,8 +270,7 @@ public class RELAY2 extends Protocol {
     public void stop() {
         super.stop();
         is_site_master=false;
-        if(log.isTraceEnabled())
-            log.trace(local_addr + ": ceased to be site master; closing bridges");
+        log.trace(local_addr + ": ceased to be site master; closing bridges");
         if(relayer != null)
             relayer.stop();
     }
@@ -622,7 +617,7 @@ public class RELAY2 extends Protocol {
             }
         }
         catch(Exception e) {
-            log.error("failed delivering message", e);
+            log.error(Util.getMessage("FailedDeliveringMessage"), e);
         }
     }
 
@@ -652,21 +647,15 @@ public class RELAY2 extends Protocol {
                 relayer.stop();
             relayer=new Relayer(this, log);
             final Relayer tmp=relayer;
-            if(async_relay_creation) {
-                timer.execute(new Runnable() {
-                    public void run() {
-                        startRelayer(tmp, bridge_name);
-                    }
-                });
-            }
+            if(async_relay_creation)
+                timer.execute(() -> startRelayer(tmp, bridge_name));
             else
                 startRelayer(relayer, bridge_name);
         }
         else {
             if(cease_site_master) { // ceased being the site master: stop the relayer
                 is_site_master=false;
-                if(log.isTraceEnabled())
-                    log.trace(local_addr + ": ceased to be site master; closing bridges");
+                log.trace(local_addr + ": ceased to be site master; closing bridges");
                 if(relayer != null)
                     relayer.stop();
             }
@@ -676,8 +665,7 @@ public class RELAY2 extends Protocol {
 
     protected void startRelayer(Relayer rel, String bridge_name) {
         try {
-            if(log.isTraceEnabled())
-                log.trace(local_addr + ": became site master; starting bridges");
+            log.trace(local_addr + ": became site master; starting bridges");
             rel.start(site_config.getBridges(), bridge_name, site);
         }
         catch(Throwable t) {

@@ -76,7 +76,7 @@ abstract public class Executing extends Protocol {
     protected final Map<Owner, Runnable> _awaitingReturn;
     
     /**
-     * This is a server side store of all the tasks that want to be ran on a
+     * This is a server side store of all the tasks that want to be run on a
      * given thread.  This  map should be updated by an incoming request before
      * awaking the task with the latch.  This map should only be retrieved after
      * first waiting on the latch for a consumer
@@ -86,9 +86,9 @@ abstract public class Executing extends Protocol {
     /**
      * This is a server side store of all the barriers for respective tasks 
      * requests.  When a consumer is starting up they should create a latch
-     * place in map with it's id and wait on it until a request comes in to
-     * wake it up it would only then touch the {@link _tasks} map.  A requestor
-     * should first place in the {@link _tasks} map and then create a latch
+     * place in map with its id and wait on it until a request comes in to
+     * wake it up it would only then touch the {@link Executing#_tasks} map.  A requestor
+     * should first place in the {@link Executing#_tasks} map and then create a latch
      * and notify the consumer
      */
     protected ConcurrentMap<Long, CyclicBarrier> _taskBarriers = 
@@ -121,7 +121,7 @@ abstract public class Executing extends Protocol {
      */
     protected Queue<Owner> _consumersAvailable = new ArrayDeque<>();
     
-    protected static enum Type {
+    protected enum Type {
         RUN_REQUEST,            // request to coordinator from client to tell of a new task request
         CONSUMER_READY,         // request to coordinator from server to tell of a new consumer ready
         CONSUMER_UNREADY,       // request to coordinator from server to tell of a consumer stopping
@@ -138,8 +138,8 @@ abstract public class Executing extends Protocol {
     }
     
     public Executing() {
-        _awaitingReturn = Collections.synchronizedMap(new HashMap<Owner, Runnable>());
-        _running = Collections.synchronizedMap(new HashMap<Runnable, Owner>());
+        _awaitingReturn = Collections.synchronizedMap(new HashMap<>());
+        _running = Collections.synchronizedMap(new HashMap<>());
     }
 
 
@@ -177,8 +177,7 @@ abstract public class Executing extends Protocol {
                 // overflows it will still be positive
                 long requestId = Math.abs(counter.getAndIncrement());
                 if(requestId == Long.MIN_VALUE) {
-                    // TODO: need to fix this it isn't safe for concurrent
-                    // modifications
+                    // TODO: need to fix this it isn't safe for concurrent modifications
                     counter.set(0);
                     requestId = Math.abs(counter.getAndIncrement());
                 }
@@ -325,14 +324,13 @@ abstract public class Executing extends Protocol {
                                     + (owner.requestId != -1 ? " request id: " + 
                                             owner.requestId : "")
                                     + "]");
-                        final Owner finalOwner = owner;
                         if (type == Type.RESULT_SUCCESS) {
-                            handleValueResponse(local_addr, 
-                                finalOwner.requestId, valueToSend);
+                            handleValueResponse(local_addr,
+                                                owner.requestId, valueToSend);
                         }
                         else if (type == Type.RESULT_EXCEPTION){
-                            handleExceptionResponse(local_addr, 
-                                finalOwner.requestId, (Throwable)valueToSend);
+                            handleExceptionResponse(local_addr,
+                                                    owner.requestId, (Throwable)valueToSend);
                         }
                     }
                     else {
@@ -491,7 +489,7 @@ abstract public class Executing extends Protocol {
                             runnable = new FutureTask<>(callable);
                         }
                         else {
-                            log.error("Request of type " + req.type + 
+                            log.error(Util.getMessage("RequestOfType") + req.type + 
                                 " sent an object of " + objectToRun + " which is invalid");
                             break;
                         }
@@ -531,7 +529,7 @@ abstract public class Executing extends Protocol {
                         handleRemoveRunRequest(owner);
                         break;
                     default:
-                        log.error("Request of type " + req.type + " not known");
+                        log.error(Util.getMessage("RequestOfType") + req.type + " not known");
                         break;
                 }
                 return null;
@@ -731,7 +729,7 @@ abstract public class Executing extends Protocol {
             _tasks.put(threadId, runnable);
             
             CyclicBarrier barrier = _taskBarriers.remove(threadId);
-            if ((received = barrier != null) == true) {
+            if (received = (barrier != null)) {
                 // Only wait 10 milliseconds, in case if the consumer was
                 // stopped between when we were told it was available and now
                 barrier.await(10, TimeUnit.MILLISECONDS);
@@ -783,7 +781,7 @@ abstract public class Executing extends Protocol {
             sendToCoordinator(Type.RUN_REQUEST, taskRequestId, local_addr);
         }
         else {
-            log.error("error resubmitting task for request-id: " + requestId);
+            log.error(Util.getMessage("ErrorResubmittingTaskForRequestId") + requestId);
         }
     }
 
@@ -826,7 +824,7 @@ abstract public class Executing extends Protocol {
             // All we can do is log the error since their is no
             // way to return this to the user since they don't
             // have a future object.
-            log.error("Runtime Error encountered from cluster execute(Runnable) method", throwable);
+            log.error(Util.getMessage("RuntimeErrorEncounteredFromClusterExecuteRunnableMethod"), throwable);
         }
     }
 
@@ -899,7 +897,7 @@ abstract public class Executing extends Protocol {
             down_prot.down(new Event(Event.MSG, msg));
         }
         catch(Exception ex) {
-            log.error("failed sending " + type + " request: " + ex);
+            log.error(Util.getMessage("FailedSending") + type + " request: " + ex);
         }  
     }
     
@@ -915,7 +913,7 @@ abstract public class Executing extends Protocol {
             down_prot.down(new Event(Event.MSG, msg));
         }
         catch(Exception ex) {
-            log.error("failed sending " + type + " request: " + ex);
+            log.error(Util.getMessage("FailedSending") + type + " request: " + ex);
         }  
     }
     
@@ -1088,8 +1086,7 @@ abstract public class Executing extends Protocol {
                 if (other.address != null) return false;
             }
             else if (!address.equals(other.address)) return false;
-            if (requestId != other.requestId) return false;
-            return true;
+            return requestId == other.requestId;
         }
 
         public String toString() {

@@ -7,7 +7,6 @@ up correctly.
     
 
 === Using multiple channels
-
 When using a fully virtual synchronous protocol stack, the performance may not be great because of the
 larger number of protocols present. For certain applications, however, throughput is more important than
 ordering, e.g. for video/audio streams or airplane tracking. In the latter case, it is important that
@@ -285,7 +284,7 @@ Because the RPC is blocking, we'll wait until the call has returned before invok
                 
 
 For each RPC, the request takes up to 30 ms, and each response will also take up to 30 ms, for a
-                    total of 60 ms _per call_. So the 10 blocking RPCs would take a total of 600 ms !
+                    total of 60 ms _per call_. So the 10 blocking RPCs would take a total of 600 ms!
                 
 
 This is clearly not desirable. However, there's a simple solution: we can use message flags
@@ -784,7 +783,7 @@ The attributes are listed below. They roughly correspond to the options of a
                                     is used.
 |min_threads|The minimum number of threads to use.
 |max_threads|The maximum number of threads to use.
-|keep_alive_time|Number of milliseconds until an idle thread is placed back into the pool
+|keep_alive_time|Number of milliseconds until an idle thread is removed from the pool
 |queue_enabled|Whether or not to use a (bounded) queue. If enabled, when all minimum
                                     threads are busy, work items are added to the queue. When the queue is full,
                                     additional threads are created, up to max_threads. When max_threads have been
@@ -827,26 +826,26 @@ On the receiving side, a message is handled by a thread pool, either the regular
 ==== Concurrent message delivery
 
 Up to version 2.5, all messages received were processed by a single thread, even if the messages were
-                sent by different senders. For instance, if sender A sent messages 1,2 and 3, and B sent message 34 and 45,
-                and if A's messages were all received first, then B's messages 34 and 35 could only be processed after
-                messages 1-3 from A were processed !
-            
+                sent by different senders. For instance, if sender A sent messages 1, 2 and 3, and B sent message 4 and 5,
+                and if A's messages were all received first, then B's messages 4 and 5 could only be processed after
+                messages 1-3 from A were processed!
+
 
 Now, we can process messages from different senders in parallel, e.g. messages 1, 2 and 3 from A can be
-                processed by one thread from the thread pool and messages 34 and 35 from B can be processed on a different
+                processed by one thread from the thread pool and messages 4 and 5 from B can be processed on a different
                 thread.
-            
+
 
 As a result, we get a speedup of almost N for a cluster of N if every node is sending messages and we
                 configure the thread pool to have at least N threads. There is actually a unit test
                 (ConcurrentStackTest.java) which demonstrates this.
-            
+
 
 [[Scopes]]
 ==== Scopes: concurrent message delivery for messages from the same sender
 
 
-NOTE: In 3.3, SCOPE is replaced with the <<AsyncInvocation>>. SCOPE will probably be removed in 4.x.
+NOTE: In JGroups 3.3, SCOPE is replaced with the <<AsyncInvocation>>. SCOPE will probably be removed in JGroups 4.x.
 
 In the previous paragraph, we showed how the concurrent stack delivers messages from different senders
                 concurrently. But all (non-OOB) messages from the same sender P are delivered in the order in which
@@ -880,7 +879,7 @@ Scoped messages apply only to _regular_ (non-OOB) messages, and are delivered
 
 This means that all updates to X are delivered in parallel to updates to Y and updates to Z. However, within
 a given scope, updates are delivered in the order in which they were performed, so X1 is delivered before
-X2, which is deliverd before X3 and so on.
+X2, which is delivered before X3 and so on.
             
 
 Taking the above example, using scoped messages, update Y1 does _not_ have to wait for
@@ -902,8 +901,8 @@ NOTE: Note that scopes should be _as unique as possible_. Compare this to hashin
       not concurrently. While this doesn't cause erroneous behavior, it defies the purpose of SCOPE. +
       Also note that, if multicast and unicast messages have the same scope, they will be delivered
       in sequence. So if A multicasts messages to the group with scope 25, and A also unicasts messages
-      to B with scope 25, then A's multicasts and unicasts will be delivered in order at B ! Again,
-      this is correct, but since multicasts and unicasts are unrelated, might slow down things !
+      to B with scope 25, then A's multicasts and unicasts will be delivered in order at B! Again,
+      this is correct, but since multicasts and unicasts are unrelated, might slow down things!
 
 
 [[OOB]]
@@ -914,7 +913,7 @@ OOB messages completely ignore any ordering constraints the stack might have. An
                 processing to wait until all other messages from the same sender have been processed, e.g. in the
                 heartbeat case: if sender P sends 5 messages and then a response to a heartbeat request received from
                 some other node, then the time taken to process P's 5 messages might take longer than the heartbeat
-                timeout, so that P might get falsely suspected ! However, if the heartbeat response is marked as OOB,
+                timeout, so that P might get falsely suspected! However, if the heartbeat response is marked as OOB,
                 then it will get processed by the OOB thread pool and therefore might be concurrent to its previously
                 sent 5 messages and not trigger a false suspicion.
             
@@ -927,37 +926,37 @@ The 2 unit tests UNICAST_OOB_Test and NAKACK_OOB_Test demonstrate how OOB messag
 
 ==== Replacing the default and OOB thread pools
 
-In 2.7, there are 3 thread pools and 4 thread factories in TP:
-                .Thread pools and factories in TP
+In JGroups 2.7, there are three thread pools and four thread factories in TP:
+
 [options="header",cols="3,10"]
 |===============
 |Name|Description
 |Default thread pool|This is the pool for handling incoming messages. It can be fetched using
                                     getDefaultThreadPool() and replaced using setDefaultThreadPool(). When setting a
-                                    thread pool, the old thread pool (if any) will be shutdown and all of it tasks
-                                    cancelled first
+                                    thread pool, the old thread pool (if any) will be shutdown and all of its tasks
+                                    cancelled first.
                                 
 |OOB thread pool|This is the pool for handling incoming OOB messages. Methods to get and set
-                                    it are getOOBThreadPool() and setOOBThreadPool()
+                                    it are getOOBThreadPool() and setOOBThreadPool().
 |Timer thread pool|This is the thread pool for the timer. The max number of threads is set through
                                 the timer.num_threads property. The timer thread pool cannot be set, it can only
                                 be retrieved using getTimer(). However, the thread factory of the timer
-                                can be replaced (see below)
+                                can be replaced (see below).
 |Default thread factory|This is the thread factory (org.jgroups.util.ThreadFactory) of the default
                                     thread pool, which handles incoming messages. A thread pool factory is used to
                                     name threads and possibly make them daemons.
                                     It can be accessed using
-                                    getDefaultThreadPoolThreadFactory() and setDefaultThreadPoolThreadFactory()
+                                    getDefaultThreadPoolThreadFactory() and setDefaultThreadPoolThreadFactory().
 |OOB thread factory|This is the thread factory for the OOB thread pool. It can be retrieved
                                 using getOOBThreadPoolThreadFactory() and set using method
-                                setOOBThreadPoolThreadFactory()
+                                setOOBThreadPoolThreadFactory().
 |Timer thread factory|This is the thread factory for the timer thread pool. It can be accessed
-                                using getTimerThreadFactory() and setTimerThreadFactory()
+                                using getTimerThreadFactory() and setTimerThreadFactory().
 |Global thread factory|The global thread factory can get used (e.g. by protocols) to create threads
                                 which don't live in the transport, e.g. the FD_SOCK server socket handler thread.
                                 Each protocol has a method getTransport(). Once the TP is obtained, getThreadFactory()
                                 can be called to get the global thread factory. The global thread factory
-                                can be replaced with setThreadFactory()
+                                can be replaced with setThreadFactory().
 
 |===============
 
@@ -969,13 +968,13 @@ NOTE: Note that thread pools and factories should be replaced after a channel ha
 
 ==== Sharing of thread pools between channels in the same JVM
 
-In 2.7, the default and OOB thread pools can be shared between instances running inside the same JVM. The
+In JGroups 2.7, the default and OOB thread pools can be shared between instances running inside the same JVM. The
                 advantage here is that multiple channels running within the same JVM can pool (and therefore save) threads.
                 The disadvantage is that thread naming will not show to which channel instance an incoming thread
                 belongs to.
             
 
-Note that we can not just shared thread pools between JChannels within the same JVM, but we can also
+Note that we can not just share thread pools between JChannels within the same JVM, but we can also
                 share entire transports. For details see <<SharedTransport>>.
             
 
@@ -1072,7 +1071,7 @@ public void viewAccepted(View view) {
         MergeView tmp=(MergeView)view;
         Vector<View> subgroups=tmp.getSubgroups();
         // merge state or determine primary partition
-        // run in a separate thread !
+        // run in a separate thread!
     }
 }
         
@@ -1304,7 +1303,7 @@ When we have a chatty protocol, scaling to a large number of nodes might be a pr
                 negative impact on the cluster. A possible impact is that more of the regular messages are dropped, and
                 have to be retransmitted, which impacts performance. Or heartbeats are dropped, leading to false
                 suspicions. So while the negative effects of chatty protocols may not be seen in small clusters, they
-                _will_ be seen in large clusters !
+                _will_ be seen in large clusters!
             
 
 
@@ -1771,12 +1770,12 @@ To test whether we have 3 different clusters, start the Draw application (shippe
 
 
 ....
-java -Djava.net.preferIPv4Stack=true org.jgroups.demos.Draw -props ./sfo.xml -name sfo1
-java -Djava.net.preferIPv4Stack=true org.jgroups.demos.Draw -props ./sfo.xml -name sfo2
-java -Djava.net.preferIPv4Stack=true org.jgroups.demos.Draw -props ./lon.xml -name lon1
-java -Djava.net.preferIPv4Stack=true org.jgroups.demos.Draw -props ./lon.xml -name lon2
-java -Djava.net.preferIPv4Stack=true org.jgroups.demos.Draw -props ./nyc.xml -name nyc1
-java -Djava.net.preferIPv4Stack=true org.jgroups.demos.Draw -props ./nyc.xml -name nyc2
+java -Djgroups.bind_addr=127.0.0.1 -Djava.net.preferIPv4Stack=true org.jgroups.demos.Draw -props ./sfo.xml -name sfo1
+java -Djgroups.bind_addr=127.0.0.1 -Djava.net.preferIPv4Stack=true org.jgroups.demos.Draw -props ./sfo.xml -name sfo2
+java -Djgroups.bind_addr=127.0.0.1 -Djava.net.preferIPv4Stack=true org.jgroups.demos.Draw -props ./lon.xml -name lon1
+java -Djgroups.bind_addr=127.0.0.1 -Djava.net.preferIPv4Stack=true org.jgroups.demos.Draw -props ./lon.xml -name lon2
+java -Djgroups.bind_addr=127.0.0.1 -Djava.net.preferIPv4Stack=true org.jgroups.demos.Draw -props ./nyc.xml -name nyc1
+java -Djgroups.bind_addr=127.0.0.1 -Djava.net.preferIPv4Stack=true org.jgroups.demos.Draw -props ./nyc.xml -name nyc2
 ....
 
 We should now have 3 local clusters (= sites) of 2 instances each. When RELAY2.relay_multicasts is true,
@@ -1902,7 +1901,7 @@ In the daisychaining approach, link usage is more even: if we look for example a
             
 
 In terms of rounds, the daisy chaining approach uses X + (N-2) rounds, so for a cluster size of 10 and
-                broadcasting 10 messages, it requires only 18 rounds, compared to 90 for the N-1 approach !
+                broadcasting 10 messages, it requires only 18 rounds, compared to 90 for the N-1 approach!
             
 
 
@@ -1914,7 +1913,7 @@ To measure performance of DAISYCHAIN, a performance test (test.Perf) was run, wi
                 every node. The config used was tcp.xml.
             
 
-The N-1 approach yielded a throughput of 73 MB/node/sec, and the daisy chaining approach 107MB/node/sec !
+The N-1 approach yielded a throughput of 73 MB/node/sec, and the daisy chaining approach 107MB/node/sec!
             
 
 
@@ -2427,7 +2426,7 @@ Note that `probe.sh -help` lists the command line options.
 To fetch all of the JMX information from all protocols, we can invoke `probe jmx`.
 
 However, this dumps all of the JMX attributes from all protocols of all cluster members, so make sure
-            to pipe the output into a file and awk and sed it for legibility !
+            to pipe the output into a file and awk and sed it for legibility!
         
 
 However, we can also JMX information from a specific protocol, e.g. FRAG2 (slightly edited&gt;:
@@ -2582,7 +2581,101 @@ Operation invocation uses reflection, so any method defined in any protocol can 
         
 
 For further information, refer to the command line options of probe (`probe.sh -h`).
-        
+
+
+==== Looking at details of RPCs with probe
+Probe can also be used to inspect for every node P:
+
+* the number of unicast RPCs invoked (sync or async)
+* the number of multicast RPCs invoked (sync or async)
+* the number of anycast RPCs invoked (sync or async)
+
+For sync RPCs, it is also possible to get the min/max/avg times for RPCs to a given destination. Note that this
+doesn't currently apply to sync RPCs which return futures as timings are not taken for these.
+
+Since taking the times for all sync RPCs takes time (2x `System.nanoTime()` for each RPC), this is disabled by default
+and has to be enabled (assuming we have 4 nodes running):
+
+----
+probe.sh rpcs-enable-details
+----
+
+From now on, timings for sync RPCs will be taken (async RPCs or RPCs which return futures are not timed and therefore
+not affected by the timing costs). To disable this, `probe rpcs-disable-details` can be called.
+
+To get RPC stats, `rpcs` and `rpcs-details` can be used:
+
+----
+[belasmac] /Users/bela/JGroups$ probe.sh rpcs rpcs-details
+
+-- sending probe on /224.0.75.75:7500
+#1 (481 bytes):
+local_addr=C [ip=127.0.0.1:55535, version=3.6.8-SNAPSHOT, cluster=uperf, 4 mbr(s)]
+uperf: sync  multicast RPCs=0
+uperf: async unicast   RPCs=0
+uperf: async multicast RPCs=0
+uperf: sync  anycast   RPCs=67480
+uperf: async anycast   RPCs=0
+uperf: sync  unicast   RPCs=189064
+rpcs-details=
+D: async: 0, sync: 130434, min/max/avg (ms): 0.13/924.88/2.613
+A: async: 0, sync: 130243, min/max/avg (ms): 0.11/926.35/2.541
+B: async: 0, sync: 63346, min/max/avg (ms): 0.14/73.94/2.221
+
+#2 (547 bytes):
+local_addr=A [ip=127.0.0.1:65387, version=3.6.8-SNAPSHOT, cluster=uperf, 4 mbr(s)]
+uperf: sync  multicast RPCs=5
+uperf: async unicast   RPCs=0
+uperf: async multicast RPCs=0
+uperf: sync  anycast   RPCs=67528
+uperf: async anycast   RPCs=0
+uperf: sync  unicast   RPCs=189200
+rpcs-details=
+<all>: async: 0, sync: 5, min/max/avg (ms): 2.11/9255.10/4917.072
+C: async: 0, sync: 130387, min/max/avg (ms): 0.13/929.71/2.467
+D: async: 0, sync: 63340, min/max/avg (ms): 0.13/63.74/2.469
+B: async: 0, sync: 130529, min/max/avg (ms): 0.13/929.71/2.328
+
+#3 (481 bytes):
+local_addr=B [ip=127.0.0.1:51000, version=3.6.8-SNAPSHOT, cluster=uperf, 4 mbr(s)]
+uperf: sync  multicast RPCs=0
+uperf: async unicast   RPCs=0
+uperf: async multicast RPCs=0
+uperf: sync  anycast   RPCs=67255
+uperf: async anycast   RPCs=0
+uperf: sync  unicast   RPCs=189494
+rpcs-details=
+C: async: 0, sync: 130616, min/max/avg (ms): 0.13/863.93/2.494
+A: async: 0, sync: 63210, min/max/avg (ms): 0.14/54.35/2.066
+D: async: 0, sync: 130177, min/max/avg (ms): 0.13/863.93/2.569
+
+#4 (482 bytes):
+local_addr=D [ip=127.0.0.1:54944, version=3.6.8-SNAPSHOT, cluster=uperf, 4 mbr(s)]
+uperf: sync  multicast RPCs=0
+uperf: async unicast   RPCs=0
+uperf: async multicast RPCs=0
+uperf: sync  anycast   RPCs=67293
+uperf: async anycast   RPCs=0
+uperf: sync  unicast   RPCs=189353
+rpcs-details=
+C: async: 0, sync: 63172, min/max/avg (ms): 0.13/860.72/2.399
+A: async: 0, sync: 130342, min/max/avg (ms): 0.13/862.22/2.338
+B: async: 0, sync: 130424, min/max/avg (ms): 0.13/866.39/2.350
+----
+
+The example output shows stats for members C, A, B and D. When looking at the output of member A, we can see that A
+
+* invoked 5 sync multicast RPCs
+* invoked 67528 sync anycasts (RPCs to a subset of the cluster, sent as a number of unicasts)
+* invoked 189200 sync unicast RPCs
+* sent 5 sync multicast RPCs which took an average of 4.9 seconds and a max of 9 seconds. The reason is that these were
+  multicast RPCs in UPerf which started the test on each node and waited until it got results from all nodes. So these
+  times are essentially the times it took the individual tests to run
+* invoked 63340 sync unicast RPCs on D, which took a min of 0.13 ms, a max of 63.74 ms and an average of 2.469 ms per RPC.
+
+To reset the numbers, `probe.sh rpcs-reset` can be called.
+
+
 
 [[MembershipChangePolicy]]
 === Determining the coordinator and controlling view generation

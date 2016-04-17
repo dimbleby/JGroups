@@ -8,9 +8,9 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 
 /**
- * Class (similar to java.nio.Bits) containing helper methods to encode variables (e.g. ints, long, List&lt;Address&gt; etc)
- * to memory (byte buffer) or output streams and read variables from memory or input streams.
- * <p/>
+ * Class (similar to (and partly copied from) java.nio.Bits) containing helper methods to encode variables
+ * (e.g. ints, long, List&lt;Address&gt; etc) to memory (byte buffer) or output streams and read variables
+ * from memory or input streams.<p/>
  * The write methods write a type (e.g. an int or a char) to a buffer ({@link ByteBuffer} or output stream, using
  * <a href="https://developers.google.com/protocol-buffers/docs/encoding">variable-length encoding</a>. If
  * there are not enough byte in the buffer to write a type, a {@link java.nio.BufferOverflowException} is thrown.
@@ -32,130 +32,31 @@ import java.nio.ByteBuffer;
  * @author Sanne Grinovero
  * @since  3.5
  */
-public class Bits {
+public final class Bits {
 
-    // -------------------- byte ------------------------ //
-   /* public static int readUnsignedByte(ByteBuffer buf) {
-        return 0;
-    }
-
-    public static int readUnsignedByte(DataInput in) throws IOException {
-        return 0;
-    }*/
-
-
+	private Bits() {
+		throw new InstantiationError( "Must not instantiate this class" );
+	}
 
     // -------------------- char ------------------------ //
 
-    /**
-     * Writes a char to a ByteBuffer
-     * @param ch the character to be written
-     * @param buf the buffer
-     */
-    public static void writeChar(char ch, ByteBuffer buf) {
+    // No compression of chars as they only use 2 bytes
+    public static char makeChar(byte[] buf, int offset) {
+        return (char) ((buf[offset + 1] & 0xFF) + (buf[offset] << 8));
     }
 
-    /**
-     * Writes a char to an output stream
-     * @param ch the character to be written
-     * @param out the output stream
-     */
-    public static void writeChar(char ch, DataOutput out) throws IOException {
+    public static void writeChar(char c, byte[] buf, int offset) {
+        buf[offset+1]=(byte)c;
+        buf[offset]=(byte)(c >>> 8);
     }
 
-    /**
-     * Reads a char from a buffer.
-     * @param buf the buffer
-     * @return the character read from the buffer
-     */
-    public static char readChar(ByteBuffer buf) {
-        return 0;
+    public static char readChar(byte[] buf, int offset) {
+        return makeChar(buf, offset);
     }
-
-    /**
-     * Reads a char from an input stream
-     * @param in the input stream
-     * @return the character read from the input stream
-     */
-    public static char readChar(DataInput in) throws IOException {
-        return 0;
-    }
-
-    /**
-     * Computes the size of a variable-length encoded character
-     * @param ch the character
-     * @return the number of bytes needed to variable-length encode the char
-     */
-    public static int size(char ch) {
-        return 0;
-    }
-
-
 
     // -------------------- short ----------------------- //
 
-
-    /**
-     * Writes a short to a ByteBuffer
-     * @param num the short to be written
-     * @param buf the buffer
-     */
-    public static void writeShort(short num, ByteBuffer buf) {
-    }
-
-    /**
-     * Writes a short to an output stream
-     * @param num the short to be written
-     * @param out the output stream
-     */
-    public static void writeShort(short num, DataOutput out) throws IOException {
-    }
-
-
-    /**
-     * Reads a short from a buffer.
-     * @param buf the buffer
-     * @return the short read from the buffer
-     */
-    public static short readShort(ByteBuffer buf) {
-        return 0;
-    }
-
-    /**
-     * Reads a short from an input stream
-     * @param in the input stream
-     * @return the short read from the input stream
-     */
-    public static short readShort(DataInput in) throws IOException {
-        return 0;
-    }
-
-    /**
-     * Reads an unsigned short from a buffer.
-     * @param buf the buffer
-     * @return the short read from the buffer
-     */
-    public static int readUnsignedShort(ByteBuffer buf) {
-        return 0;
-    }
-
-    /**
-     * Reads an unsigned short from an input stream
-     * @param in the input stream
-     * @return the short read from the input stream
-     */
-    public static int readUnsignedShort(DataInput in) throws IOException {
-        return 0;
-    }
-
-    /**
-     * Computes the size of a variable-length encoded short
-     * @param num the short
-     * @return the number of bytes needed to variable-length encode num
-     */
-    public static int size(short num) {
-        return 0;
-    }
+    // No implementations as encoding a char doesn't use much space
 
     public static short makeShort(byte a, byte b) {
         return (short)((a << 8) | (b & 0xff));
@@ -165,7 +66,14 @@ public class Bits {
         return (short) (a & 0xff);
     }
 
+    public static void writeShort(short s, byte[] buf, int offset) {
+        buf[offset+1]=(byte)s;
+        buf[offset]=(byte)(s >>> 8);
+    }
 
+    public static short readShort(byte[] buf, int offset) {
+        return (short)((buf[offset+1] & 0xFF) + (buf[offset] << 8));
+    }
 
     // --------------------- int ------------------------ //
 
@@ -176,6 +84,14 @@ public class Bits {
      * @param buf the buffer
      */
     public static void writeInt(int num, ByteBuffer buf) {
+        if(num == 0) {
+            buf.put((byte)0);
+            return;
+        }
+        final byte bytes_needed=bytesRequiredFor(num);
+        buf.put(bytes_needed);
+        for(int i=0; i < bytes_needed; i++)
+            buf.put(getByteAt(num, i));
     }
 
     /**
@@ -194,6 +110,24 @@ public class Bits {
             out.write(getByteAt(num, i));
     }
 
+    public static void writeInt(int num, byte[] buf, int offset) {
+        buf[offset+3]=(byte)num;
+        buf[offset+2]=(byte)(num >>>  8);
+        buf[offset+1]=(byte)(num >>> 16);
+        buf[offset]=(byte)(num >>> 24);
+    }
+
+    public static void writeIntCompressed(int num, byte[] buf, int offset) {
+        if(num == 0) {
+            buf[offset]=0;
+            return;
+        }
+        final byte bytes_needed=bytesRequiredFor(num);
+        buf[offset++]=bytes_needed;
+        for(int i=0; i < bytes_needed; i++)
+            buf[offset++]=getByteAt(num, i);
+    }
+
 
     /**
      * Reads an int from a buffer.
@@ -201,7 +135,12 @@ public class Bits {
      * @return the int read from the buffer
      */
     public static int readInt(ByteBuffer buf) {
-        return 0;
+        byte len=buf.get();
+        if(len == 0)
+            return 0;
+        byte[] retval=new byte[len];
+        buf.get(retval, 0, len);
+        return makeInt(retval, 0, len);
     }
 
     /**
@@ -216,6 +155,23 @@ public class Bits {
         byte[] buf=new byte[len];
         in.readFully(buf, 0, len);
         return makeInt(buf, 0, len);
+    }
+
+    public static int readInt(byte[] buf, int offset) {
+        return ((buf[offset+3] & 0xFF)) +
+          ((buf[offset+2] & 0xFF) <<  8) +
+          ((buf[offset+1] & 0xFF) << 16) +
+          ((buf[offset]) << 24);
+    }
+
+    public static int readIntCompressed(byte[] buf, int offset) {
+        byte len=buf[offset++];
+        if(len == 0)
+            return 0;
+        byte[] buffer=new byte[len];
+        for(int i=0; i < len; i++)
+            buffer[i]=buf[offset++];
+        return makeInt(buffer, 0, len);
     }
 
 
@@ -239,6 +195,14 @@ public class Bits {
      * @param buf the buffer
      */
     public static void writeLong(long num, ByteBuffer buf) {
+        if(num == 0) {
+            buf.put((byte)0);
+            return;
+        }
+        final byte bytes_needed=bytesRequiredFor(num);
+        buf.put(bytes_needed);
+        for(int i=0; i < bytes_needed; i++)
+            buf.put(getByteAt(num, i));
     }
 
     /**
@@ -259,6 +223,29 @@ public class Bits {
             out.write(getByteAt(num, i));
     }
 
+    public static void writeLong(long num, byte[] buf, int offset) {
+        buf[offset+7]=(byte)num;
+        buf[offset+6]=(byte)(num >>>  8);
+        buf[offset+5]=(byte)(num >>> 16);
+        buf[offset+4]=(byte)(num >>> 24);
+        buf[offset+3]=(byte)(num >>> 32);
+        buf[offset+2]=(byte)(num >>> 40);
+        buf[offset+1]=(byte)(num >>> 48);
+        buf[offset]=(byte)(num >>> 56);
+    }
+
+    public static void writeLongCompressed(long num, byte[] buf, int offset) {
+        if(num == 0) {
+            buf[offset]=0;
+            return;
+        }
+        final byte bytes_needed=bytesRequiredFor(num);
+        buf[offset++]=bytes_needed;
+        for(int i=0; i < bytes_needed; i++)
+            buf[offset++]=getByteAt(num, i);
+    }
+
+
 
     /**
      * Reads a long from a buffer.
@@ -266,7 +253,12 @@ public class Bits {
      * @return the long read from the buffer
      */
     public static long readLong(ByteBuffer buf) {
-        return 0;
+        byte len=buf.get();
+        if(len == 0)
+            return 0;
+        byte[] retval=new byte[len];
+        buf.get(retval, 0, len);
+        return makeLong(retval, 0, len);
     }
 
     /**
@@ -283,6 +275,27 @@ public class Bits {
         byte[] buf=new byte[len];
         in.readFully(buf, 0, len);
         return makeLong(buf, 0, len);
+    }
+
+    public static long readLong(byte[] buf, int offset) {
+        return ((buf[offset+7] & 0xFFL)) +
+          ((buf[offset+6] & 0xFFL) <<  8) +
+          ((buf[offset+5] & 0xFFL) << 16) +
+          ((buf[offset+4] & 0xFFL) << 24) +
+          ((buf[offset+3] & 0xFFL) << 32) +
+          ((buf[offset+2] & 0xFFL) << 40) +
+          ((buf[offset+1] & 0xFFL) << 48) +
+          (((long) buf[offset])    << 56);
+    }
+
+    public static long readLongCompressed(byte[] buf, int offset) {
+        byte len=buf[offset++];
+        if(len == 0)
+            return 0;
+        byte[] buffer=new byte[len];
+        for(int i=0; i < len; i++)
+            buffer[i]=buf[offset++];
+        return makeLong(buffer, 0, len);
     }
 
     /**
@@ -312,7 +325,26 @@ public class Bits {
      * @param buf the buffer to write to
      */
     public static void writeLongSequence(long hd, long hr, ByteBuffer buf) {
+        if(hr < hd)
+            throw new IllegalArgumentException("hr (" + hr + ") has to be >= hd (" + hd + ")");
 
+        if(hd == 0 && hr == 0) {
+            buf.put((byte)0);
+            return;
+        }
+
+        long delta=hr - hd;
+
+        // encode highest_delivered followed by delta
+        byte bytes_for_hd=bytesRequiredFor(hd), bytes_for_delta=bytesRequiredFor(delta);
+        byte bytes_needed=encodeLength(bytes_for_hd, bytes_for_delta);
+        buf.put(bytes_needed);
+
+        for(int i=0; i < bytes_for_hd; i++)
+            buf.put(getByteAt(hd, i));
+
+        for(int i=0; i < bytes_for_delta; i++)
+            buf.put(getByteAt(delta, i));
     }
 
     /**
@@ -357,7 +389,17 @@ public class Bits {
      * @return an array of 2 longs (hd and hr)
      */
     public static long[] readLongSequence(ByteBuffer buf) {
-        return null;
+        byte len=buf.get();
+        if(len == 0)
+            return new long[]{0,0};
+
+        byte[] lengths=decodeLength(len);
+        long[] seqnos=new long[2];
+        byte[] retval=new byte[lengths[0] + lengths[1]];
+        buf.get(retval, 0, retval.length);
+        seqnos[0]=makeLong(retval, 0, lengths[0]);
+        seqnos[1]=makeLong(retval, lengths[0], lengths[1]) + seqnos[0];
+        return seqnos;
     }
 
     /**
@@ -421,6 +463,7 @@ public class Bits {
      * @param buf the buffer
      */
     public static void writeFloat(float num, ByteBuffer buf) {
+        writeInt(Float.floatToIntBits(num), buf);
     }
 
     /**
@@ -429,8 +472,12 @@ public class Bits {
      * @param out the output stream
      */
     public static void writeFloat(float num, DataOutput out) throws IOException {
+        writeInt(Float.floatToIntBits(num), out);
     }
 
+    public static void writeFloat(float num, byte[] buf, int offset) {
+        writeInt(Float.floatToIntBits(num), buf, offset);
+    }
 
     /**
      * Reads a a float from a buffer.
@@ -438,7 +485,7 @@ public class Bits {
      * @return the float read from the buffer
      */
     public static float readFloat(ByteBuffer buf) {
-        return 0;
+        return Float.intBitsToFloat(readInt(buf));
     }
 
     /**
@@ -447,7 +494,11 @@ public class Bits {
      * @return the float read from the input stream
      */
     public static float readFloat(DataInput in) throws IOException {
-        return 0;
+        return Float.intBitsToFloat(readInt(in));
+    }
+
+    public static float readFloat(byte[] buf, int offset) {
+        return Float.intBitsToFloat(readInt(buf, offset));
     }
 
 
@@ -457,7 +508,7 @@ public class Bits {
      * @return the number of bytes needed to variable-length encode num
      */
     public static int size(float num) {
-        return 0;
+        return size(Float.floatToIntBits(num));
     }
 
 
@@ -470,6 +521,7 @@ public class Bits {
      * @param buf the buffer
      */
     public static void writeDouble(double num, ByteBuffer buf) {
+        writeLong(Double.doubleToLongBits(num), buf);
     }
 
     /**
@@ -478,6 +530,11 @@ public class Bits {
      * @param out the output stream
      */
     public static void writeDouble(double num, DataOutput out) throws IOException {
+        writeLong(Double.doubleToLongBits(num), out);
+    }
+
+    public static void writeDouble(double num, byte[] buf, int offset) {
+        writeLong(Double.doubleToLongBits(num), buf, offset);
     }
 
 
@@ -487,7 +544,7 @@ public class Bits {
      * @return the double read from the buffer
      */
     public static double readDouble(ByteBuffer buf) {
-        return 0;
+        return Double.longBitsToDouble(readLong(buf));
     }
 
     /**
@@ -496,9 +553,12 @@ public class Bits {
      * @return the double read from the input stream
      */
     public static double readDouble(DataInput in) throws IOException {
-        return 0;
+        return Double.longBitsToDouble(readLong(in));
     }
 
+    public static double readDouble(byte[] buf, int offset) {
+        return Double.longBitsToDouble(readLong(buf, offset));
+    }
 
     /**
      * Computes the size of a variable-length encoded double
@@ -506,7 +566,7 @@ public class Bits {
      * @return the number of bytes needed to variable-length encode num
      */
     public static int size(double num) {
-        return 0;
+        return size(Double.doubleToLongBits(num));
     }
 
 
@@ -522,7 +582,12 @@ public class Bits {
      * @param buf the buffer
      */
     public static void writeString(String s, ByteBuffer buf) {
-
+        buf.put((byte)(s != null? 1 : 0));
+        if(s != null) {
+            byte[] bytes=s.getBytes();
+            writeInt(bytes.length, buf);
+            buf.put(bytes);
+        }
     }
 
     /**
@@ -537,9 +602,8 @@ public class Bits {
             out.write(1);
             out.writeUTF(s);
         }
-        else {
+        else
             out.write(0);
-        }
     }
 
     /**
@@ -548,7 +612,12 @@ public class Bits {
      * @return the string read from buf
      */
     public static String readString(ByteBuffer buf) {
-        return null;
+        if(buf.get() == 0)
+            return null;
+        int len=readInt(buf);
+        byte[] bytes=new byte[len];
+        buf.get(bytes);
+        return new String(bytes);
     }
 
     /**
@@ -584,6 +653,13 @@ public class Bits {
                 utflen += 2;
         }
         return utflen;
+    }
+
+    public static int size(String str) {
+        if(str == null)
+            return Global.BYTE_SIZE;
+        byte[] bytes=str.getBytes();
+        return Global.BYTE_SIZE + size(bytes.length) + bytes.length;
     }
 
 

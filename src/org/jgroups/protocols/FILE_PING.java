@@ -13,11 +13,9 @@ import org.jgroups.util.UUID;
 import org.jgroups.util.Util;
 
 import java.io.*;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.Future;
+import java.util.regex.Pattern;
 
 
 /**
@@ -29,15 +27,13 @@ import java.util.concurrent.Future;
  */
 public class FILE_PING extends Discovery {
     protected static final String SUFFIX=".list";
+    protected static final Pattern regexp=Pattern.compile("[\0<>:\"/\\|?*]");
 
     /* -----------------------------------------    Properties     -------------------------------------------------- */
 
 
     @Property(description="The absolute path of the shared file")
     protected String location=File.separator + "tmp" + File.separator + "jgroups";
-
-    @Deprecated @Property(description="Interval (in milliseconds) at which the own Address is written. 0 disables it.")
-    protected long interval=60000;
 
     @Property(description="If true, on a view change, the new coordinator removes files from old coordinators")
     protected boolean remove_old_coords_on_view_change=false;
@@ -61,10 +57,7 @@ public class FILE_PING extends Discovery {
 
     /* --------------------------------------------- Fields ------------------------------------------------------ */
     protected File                        root_dir=null;
-    protected static final FilenameFilter filter=new FilenameFilter() {
-        public boolean accept(File dir, String name) {return name.endsWith(SUFFIX);}
-    };
-    protected volatile View               prev_view;
+    protected static final FilenameFilter filter=(dir, name1) -> name1.endsWith(SUFFIX);
     protected Future<?>                   info_writer;
 
     public boolean isDynamic() {return true;}
@@ -113,7 +106,7 @@ public class FILE_PING extends Discovery {
             if(responses.isEmpty()) {
                 PhysicalAddress physical_addr=(PhysicalAddress)down(new Event(Event.GET_PHYSICAL_ADDRESS,local_addr));
                 PingData coord_data=new PingData(local_addr, true, UUID.get(local_addr), physical_addr).coord(is_coord);
-                write(Arrays.asList(coord_data), cluster_name);
+                write(Collections.singletonList(coord_data), cluster_name);
                 return;
             }
 
@@ -140,7 +133,7 @@ public class FILE_PING extends Discovery {
     /** Only add the discovery response if the logical address is not present or the physical addrs are different */
     protected boolean addDiscoveryResponseToCaches(Address mbr, String logical_name, PhysicalAddress physical_addr) {
         PhysicalAddress phys_addr=(PhysicalAddress)down_prot.down(new Event(Event.GET_PHYSICAL_ADDRESS, mbr));
-        boolean added=phys_addr == null || !phys_addr.equals(physical_addr);
+        boolean added=!Objects.equals(phys_addr, physical_addr);
         super.addDiscoveryResponseToCaches(mbr, logical_name, physical_addr);
         if(added && is_coord)
             writeAll();
@@ -149,7 +142,8 @@ public class FILE_PING extends Discovery {
 
     protected static String addressToFilename(Address mbr) {
         String logical_name=UUID.get(mbr);
-        return addressAsString(mbr) + (logical_name != null? "." + logical_name + SUFFIX : SUFFIX);
+        String name=(addressAsString(mbr) + (logical_name != null? "." + logical_name + SUFFIX : SUFFIX));
+        return regexp.matcher(name).replaceAll("-");
     }
 
     protected void createRootDir() {
@@ -202,7 +196,7 @@ public class FILE_PING extends Discovery {
         deleteFile(file);
     }
 
-    /** Removes all files except the member passed as argument (can be null) */
+    /** Removes all files for the given cluster name */
     protected void removeAll(String clustername) {
         if(clustername == null)
             return;
@@ -294,7 +288,7 @@ public class FILE_PING extends Discovery {
             write(list, new FileOutputStream(destination));
         }
         catch(Exception ioe) {
-            log.error("attempt to write data failed at " + clustername + " : " + destination.getName(), ioe);
+            log.error(Util.getMessage("AttemptToWriteDataFailedAt") + clustername + " : " + destination.getName(), ioe);
             deleteFile(destination);
         }
     }
@@ -322,7 +316,7 @@ public class FILE_PING extends Discovery {
                 log.trace("Deleted file result: "+file.getAbsolutePath() +" : "+result);
             }
             catch(Throwable e) {
-                log.error("Failed to delete file: " + file.getAbsolutePath(), e);
+                log.error(Util.getMessage("FailedToDeleteFile") + file.getAbsolutePath(), e);
             }
         }
         return result;

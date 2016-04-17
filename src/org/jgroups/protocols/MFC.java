@@ -137,12 +137,9 @@ public class MFC extends FlowControl {
 
     protected void handleCredit(Address sender, long increase) {
         credits.replenish(sender, increase);
-        if(log.isTraceEnabled()) {
-            StringBuilder sb=new StringBuilder();
-            sb.append("received " + increase + " credits from ").append(sender).append(", new credits for " + sender + " : ")
-                    .append(credits.get(sender) + ", min_credits=" + credits.getMinCredits());
-            log.trace(sb);
-        }
+        if(log.isTraceEnabled())
+            log.trace("received %d credits from %s, new credits for %s: %d, min_credits=%d",
+                      increase, sender, sender, credits.get(sender), credits.getMinCredits());
     }
 
 
@@ -150,13 +147,8 @@ public class MFC extends FlowControl {
         super.handleViewChange(mbrs);
 
         Set<Address> keys=new HashSet<>(credits.keys());
-        for(Address key: keys) {
-            if(!mbrs.contains(key))
-                credits.remove(key);
-        }
-
-        for(Address key: mbrs)
-            credits.putIfAbsent(key);
+        keys.stream().filter(key -> !mbrs.contains(key)).forEach(key -> credits.remove(key));
+        mbrs.forEach(key -> credits.putIfAbsent(key));
     }
 
 

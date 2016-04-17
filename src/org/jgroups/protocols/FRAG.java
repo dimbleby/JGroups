@@ -53,8 +53,7 @@ public class FRAG extends Protocol {
     
     /** Contains a frag table per sender, this way it becomes easier to clean up if a sender leaves or crashes */
     private final FragmentationList  fragment_list=new FragmentationList();
-
-    private AtomicInteger            curr_id=new AtomicInteger(1);
+    private final AtomicInteger      curr_id=new AtomicInteger(1);
     private final List<Address>      members=new ArrayList<>(11);
     
     
@@ -210,9 +209,9 @@ public class FRAG extends Protocol {
 
             if(log.isTraceEnabled()) {
                 StringBuilder sb=new StringBuilder();
-                sb.append("fragmenting packet to ").append(dest != null ? dest.toString() : "<all members>");
-                sb.append(" (size=").append(buffer.length).append(") into ").append(num_frags);
-                sb.append(" fragment(s) [frag_size=").append(frag_size).append(']');
+                sb.append("fragmenting packet to ").append(dest != null ? dest.toString() : "<all members>")
+                        .append(" (size=").append(buffer.length).append(") into ").append(num_frags)
+                        .append(" fragment(s) [frag_size=").append(frag_size).append(']');
                 log.trace(sb.toString());
             }
 
@@ -225,7 +224,7 @@ public class FRAG extends Protocol {
             }
         }
         catch(Exception e) {
-            log.error("exception occurred trying to fragment message", e);
+            log.error(Util.getMessage("ExceptionOccurredTryingToFragmentMessage"), e);
         }
     }
 
@@ -264,7 +263,7 @@ public class FRAG extends Protocol {
             return assembled_msg;
         }
         catch(Exception e) {
-            log.error("failed unfragmenting a message", e);
+            log.error(Util.getMessage("FailedUnfragmentingAMessage"), e);
             return null;
         }
     }

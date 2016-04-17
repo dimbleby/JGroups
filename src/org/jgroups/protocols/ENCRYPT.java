@@ -17,16 +17,14 @@ import java.io.*;
 import java.security.*;
 import java.security.cert.CertificateException;
 import java.security.spec.X509EncodedKeySpec;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.WeakHashMap;
+import java.util.*;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiFunction;
 
 /**
  * ENCRYPT layer. Encrypt and decrypt communication in JGroups
@@ -144,7 +142,7 @@ public class ENCRYPT extends Protocol {
     @Property(name="store_password",
               description="Password used to check the integrity/unlock the keystore. Change the default",
               exposeAsManagedAttribute=false)
-    private String storePassword="changeit"; //JDK default
+    protected String storePassword="changeit"; //JDK default
 
     @Property(name="key_password", description="Password for recovering the key. Change the default",
               exposeAsManagedAttribute=false)
@@ -152,7 +150,7 @@ public class ENCRYPT extends Protocol {
 
 
     @Property(name="alias", description="Alias used for recovering the key. Change the default",exposeAsManagedAttribute=false)
-    private String alias="mykey"; // JDK default
+    protected String alias="mykey"; // JDK default
 
     @Property(description="Number of ciphers in the pool to parallelize encrypt and decrypt requests",writable=false)
     protected int cipher_pool_size=8;
@@ -162,7 +160,7 @@ public class ENCRYPT extends Protocol {
     KeyPair Kpair; // to store own's public/private Key
 
     //	 for client to store server's public Key
-    PublicKey serverPubKey=null;
+    // PublicKey serverPubKey;
 
     // Cipher pools used for encryption and decryption. Size is cipher_pool_size
     protected Cipher[] encoding_ciphers, decoding_ciphers;
@@ -186,16 +184,16 @@ public class ENCRYPT extends Protocol {
     private boolean queue_down=false;
 
     // queue to hold upcoming messages while key negotiation is happening
-    private BlockingQueue<Message> upMessageQueue=new LinkedBlockingQueue<>();
+    private final BlockingQueue<Message> upMessageQueue=new LinkedBlockingQueue<>();
 
     //	 queue to hold downcoming messages while key negotiation is happening
-    private BlockingQueue<Message> downMessageQueue=new LinkedBlockingQueue<>();
+    private final BlockingQueue<Message> downMessageQueue=new LinkedBlockingQueue<>();
     // decrypting cypher for secret key requests
     private Cipher asymCipher;
 
     /** determines whether to encrypt the entire message, or just the buffer */
     @Property
-    private boolean encrypt_entire_message=false;
+    protected boolean encrypt_entire_message=false;
 
 
 
@@ -229,7 +227,7 @@ public class ENCRYPT extends Protocol {
       *  taken m original ENCRYPT file
       */
     private static String getAlgorithm(String s) {
-        int index=s.indexOf("/");
+        int index=s.indexOf('/');
         if(index == -1)
             return s;
 
@@ -495,7 +493,7 @@ public class ENCRYPT extends Protocol {
 			}
 
 		} catch (Exception e) {
-			log.error("could not initialize new ciphers", e);
+			log.error(Util.getMessage("CouldNotInitializeNewCiphers"), e);
 			if ( e instanceof RuntimeException) {
 				throw (RuntimeException)e;
 			} else {
@@ -542,7 +540,7 @@ public class ENCRYPT extends Protocol {
     }
 
 	private boolean keyServerChanged(Address newKeyServer) {
-		return keyServerAddr == null || !keyServerAddr.equals(newKeyServer);
+		return !Objects.equals(keyServerAddr, newKeyServer);
 	}
 
 
@@ -566,6 +564,7 @@ public class ENCRYPT extends Protocol {
 
 
 
+    @SuppressWarnings("UnusedParameters")
     protected Object handleEncryptedMessage(Message msg, Event evt, EncryptHeader hdr) throws Exception {
         // if queueing then pass into queue to be dealt with later
         if(queue_up) {
@@ -656,7 +655,7 @@ public class ENCRYPT extends Protocol {
                     up_prot.up(new Event(Event.MSG, msg));
             }
             catch(Throwable t) {
-                log.error("failed decrypting and sending message up when draining queue", t);
+                log.error(Util.getMessage("FailedDecryptingAndSendingMessageUpWhenDrainingQueue"), t);
             }
         }
     }
@@ -676,7 +675,7 @@ public class ENCRYPT extends Protocol {
                 encryptAndSend(tmp);
             }
             catch(Throwable t) {
-                log.error("failed sending message down when draining queue", t);
+                log.error(Util.getMessage("FailedSendingMessageDownWhenDrainingQueue"), t);
             }
         }
     }
@@ -894,7 +893,7 @@ public class ENCRYPT extends Protocol {
             return keySpec;
         }
         catch(Exception e) {
-            log.error("failed decoding key", e);
+            log.error(Util.getMessage("FailedDecodingKey"), e);
             return null;
         }
     }
@@ -922,11 +921,11 @@ public class ENCRYPT extends Protocol {
 
 
     /** Decrypts all messages in a batch, replacing encrypted messages in-place with their decrypted versions */
-    protected class Decrypter implements MessageBatch.Visitor<Message> {
+    protected class Decrypter implements BiFunction<Message,MessageBatch,Message> {
         protected Lock   lock;
         protected Cipher cipher;
 
-        public Message visit(Message msg, MessageBatch batch) {
+        public Message apply(Message msg, MessageBatch batch) {
             EncryptHeader hdr;
 
             if(msg == null || (msg.getLength() == 0 && !encrypt_entire_message) || ((hdr=(EncryptHeader)msg.getHeader(id)) == null))

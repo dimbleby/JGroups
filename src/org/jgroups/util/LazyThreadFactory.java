@@ -28,7 +28,7 @@ public class LazyThreadFactory extends DefaultThreadFactory {
      }
 
 
-    public Thread newThread(ThreadGroup group, Runnable r, String name) {
+    private Thread newThread(ThreadGroup group, Runnable r, String name) {
         Thread retval=null;
         String addr=address;
         if(addr == null)
@@ -59,6 +59,10 @@ public class LazyThreadFactory extends DefaultThreadFactory {
         super.setClusterName(cluster_name);
         if(changed)
             renameThreads();
+    }
+
+    public void destroy() {
+        threads.clear();
     }
 
     protected void renameThreads() {

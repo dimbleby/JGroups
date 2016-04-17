@@ -1,19 +1,16 @@
 package org.jgroups.protocols;
 
-import org.jgroups.Address;
-import org.jgroups.Event;
-import org.jgroups.Message;
-import org.jgroups.View;
+import org.jgroups.*;
 import org.jgroups.annotations.MBean;
 import org.jgroups.annotations.ManagedAttribute;
 import org.jgroups.annotations.ManagedOperation;
 import org.jgroups.annotations.Property;
 import org.jgroups.stack.Protocol;
 import org.jgroups.util.Average;
+import org.jgroups.util.Bits;
 import org.jgroups.util.MessageBatch;
 import org.jgroups.util.Util;
 
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -79,16 +76,7 @@ public abstract class FlowControl extends Protocol {
     @Property(description="Computed as max_credits x min_theshold unless explicitly set")
     protected long min_credits=0;
     
-    /**
-     * Whether an up thread that comes back down should be allowed to bypass blocking if all credits are exhausted.
-     * Avoids JGRP-465. Set to false by default in 2.5 because we have OOB messages for credit replenishments -
-     * this flag should not be set to true if the concurrent stack is used
-     */
-    @Property(description="Does not block a down message if it is a result of handling an up message in the" +
-            "same thread. Fixes JGRP-928",deprecatedMessage="not used any longer")
-    protected boolean ignore_synchronous_response=false;
-    
-    
+
     
     
     /* ---------------------------------------------   JMX      ------------------------------------------------------ */
@@ -174,21 +162,16 @@ public abstract class FlowControl extends Protocol {
             if(key < 0 || val < 0)
                 throw new IllegalArgumentException("keys and values must be >= 0");
 
-            if(prev_key != null) {
-                if(key <= prev_key)
-                    throw new IllegalArgumentException("keys are not sorted: " + vals);
-            }
+            if(prev_key != null && key <= prev_key)
+                throw new IllegalArgumentException("keys are not sorted: " + vals);
             prev_key=key;
 
-            if(prev_val != null) {
-                if(val <= prev_val)
-                    throw new IllegalArgumentException("values are not sorted: " + vals);
-            }
+            if(prev_val != null && val <= prev_val)
+                throw new IllegalArgumentException("values are not sorted: " + vals);
             prev_val=val;
             max_block_times.put(key, val);
         }
-        if(log.isDebugEnabled())
-            log.debug("max_block_times: " + max_block_times);
+        log.debug("max_block_times: %s", max_block_times);
     }
 
     public String getMaxBlockTimes() {
@@ -295,9 +278,8 @@ public abstract class FlowControl extends Protocol {
             log.warn("No fragmentation protocol was found. When flow control is used, we recommend " +
                        "a fragmentation protocol, due to http://jira.jboss.com/jira/browse/JGRP-590");
         if(frag_size > 0 && frag_size >= min_credits) {
-            log.warn("The fragmentation size of the fragmentation protocol is " + frag_size +
-                       ", which is greater than min_credits (" + min_credits +  "). This can lead to blockings " +
-                       "(https://issues.jboss.org/browse/JGRP-1659)");
+            log.warn("The fragmentation size of the fragmentation protocol is %d, which is greater than min_credits (%d). " +
+                       "This can lead to blockings (https://issues.jboss.org/browse/JGRP-1659)", frag_size, min_credits);
         }
         running=true;
     }
@@ -399,17 +381,17 @@ public abstract class FlowControl extends Protocol {
         switch(hdr.type) {
             case FcHeader.REPLENISH:
                 num_credit_responses_received++;
-                handleCredit(msg.getSrc(), (Long)msg.getObject());
+                handleCredit(msg.getSrc(), bufferToLong(msg.getRawBuffer(), msg.getOffset()));
                 break;
             case FcHeader.CREDIT_REQUEST:
                 num_credit_requests_received++;
                 Address sender=msg.getSrc();
-                Long requested_credits=(Long)msg.getObject();
+                Long requested_credits=bufferToLong(msg.getRawBuffer(), msg.getOffset());
                 if(requested_credits != null)
                     handleCreditRequest(received, sender,requested_credits);
                 break;
             default:
-                log.error("header type " + hdr.type + " not known");
+                log.error(Util.getMessage("HeaderTypeNotKnown"), local_addr, hdr.type);
                 break;
         }
     }
@@ -480,7 +462,7 @@ public abstract class FlowControl extends Protocol {
         if(sender == null || length == 0 || (cred=map.get(sender)) == null)
             return 0;
         if(log.isTraceEnabled())
-            log.trace(sender + " used " + length + " credits, " + (cred.get() - length) + " remaining");
+            log.trace("%s used %d credits, %d remaining", sender, length, cred.get() - length);
         return cred.decrementAndGet(length);
     }
 
@@ -495,7 +477,7 @@ public abstract class FlowControl extends Protocol {
             if(cred == null)
                 return;
             if(log.isTraceEnabled())
-                log.trace("received credit request from " + sender + ": sending " + requested_credits + " credits");
+                log.trace("received credit request from %s: sending %d credits", sender, requested_credits);
             cred.increment(requested_credits);
             sendCredit(sender, requested_credits);
         }
@@ -504,9 +486,9 @@ public abstract class FlowControl extends Protocol {
 
     protected void sendCredit(Address dest, long credits) {
         if(log.isTraceEnabled())
-            if(log.isTraceEnabled()) log.trace("sending " + credits + " credits to " + dest);
-        Message msg=new Message(dest, credits).setFlag(Message.Flag.OOB, Message.Flag.INTERNAL, Message.Flag.DONT_BUNDLE)
-          .putHeader(this.id,REPLENISH_HDR);
+            log.trace("sending %d credits to %s", credits, dest);
+        Message msg=new Message(dest, longToBuffer(credits))
+          .setFlag(Message.Flag.OOB, Message.Flag.INTERNAL, Message.Flag.DONT_BUNDLE).putHeader(this.id,REPLENISH_HDR);
         down_prot.down(new Event(Event.MSG, msg));
         num_credit_responses_sent++;
     }
@@ -517,11 +499,11 @@ public abstract class FlowControl extends Protocol {
      * @param dest The member to which we send the credit request
      * @param credits_needed The number of bytes (of credits) left for dest
      */
-    protected void sendCreditRequest(final Address dest, Long credits_needed) {
+    protected void sendCreditRequest(final Address dest, long credits_needed) {
         if(log.isTraceEnabled())
-            log.trace("sending request for " + credits_needed + " credits to " + dest);
-        Message msg=new Message(dest, credits_needed).setFlag(Message.Flag.OOB, Message.Flag.INTERNAL, Message.Flag.DONT_BUNDLE)
-          .putHeader(this.id, CREDIT_REQUEST_HDR);
+            log.trace("sending request for %d credits to %s", credits_needed, dest);
+        Message msg=new Message(dest, longToBuffer(credits_needed))
+          .setFlag(Message.Flag.OOB, Message.Flag.INTERNAL, Message.Flag.DONT_BUNDLE).putHeader(this.id, CREDIT_REQUEST_HDR);
         down_prot.down(new Event(Event.MSG, msg));
         num_credit_requests_sent++;
     }
@@ -529,29 +511,31 @@ public abstract class FlowControl extends Protocol {
 
     protected void handleViewChange(List<Address> mbrs) {
         if(mbrs == null) return;
-        if(log.isTraceEnabled()) log.trace("new membership: " + mbrs);
+        if(log.isTraceEnabled()) log.trace("new membership: %s", mbrs);
 
         // add members not in membership to received and sent hashmap (with full credits)
-        for(Address addr: mbrs) {
-            if(!received.containsKey(addr))
-                received.put(addr, new Credit(max_credits, null));
-        }
+        mbrs.stream().filter(addr -> !received.containsKey(addr)).forEach(addr -> received.put(addr, new Credit(max_credits, null)));
+
         // remove members that left
-        for(Iterator<Address> it=received.keySet().iterator(); it.hasNext();) {
-            Address addr=it.next();
-            if(!mbrs.contains(addr))
-                it.remove();
-        }
+        received.keySet().retainAll(mbrs);
     }
 
 
 
     protected static String printMap(Map<Address,Credit> m) {
-        StringBuilder sb=new StringBuilder();
-        for(Map.Entry<Address,Credit> entry: m.entrySet()) {
-            sb.append(entry.getKey()).append(": ").append(entry.getValue()).append("\n");
-        }
-        return sb.toString();
+        return m.entrySet().stream().collect(StringBuilder::new,
+                                             (sb,entry) -> sb.append(entry.getKey()).append(": ").append(entry.getValue()).append("\n"),
+                                             (l,r) -> {}).toString();
+    }
+
+    protected static byte[] longToBuffer(long num) {
+        byte[] buf=new byte[Global.LONG_SIZE];
+        Bits.writeLong(num, buf, 0);
+        return buf;
+    }
+
+    protected static long bufferToLong(byte[] buf, int offset) {
+        return Bits.readLong(buf, offset);
     }
 
 

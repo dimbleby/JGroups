@@ -8,7 +8,7 @@
 
     <property name="root.dir"              value="${basedir}"/>
     <property name="conf.dir"              value="${root.dir}/conf"/>
-    <property file="${conf.dir}/VERSION.properties"/> <!-- Defines jgroups.version -->
+    <property file="${conf.dir}/JGROUPS_VERSION.properties"/> <!-- Defines jgroups.version -->
     <property name="version"               value="${jgroups.version}"/>
     <property name="build.properties.file" value="build.properties"/>
     <property file="${build.properties.file}"/>
@@ -79,11 +79,11 @@
 
     <!-- properties to determine IP version used -->
     <condition property="java.net.preferIPv4Stack" value="true" else="false">
-      <isfalse value="${jgroups.useIPv6}"/>
+        <isfalse value="${jgroups.useIPv6}"/>
     </condition>
 
     <condition property="java.net.preferIPv6Addresses" value="true" else="false">
-      <istrue value="${jgroups.useIPv6}"/>
+        <istrue value="${jgroups.useIPv6}"/>
     </condition>
 
 
@@ -200,6 +200,43 @@
 -->
 
 
+
+   <!-- <target name="publish" description="Publish to the staging Nexus repo" depends="define-staging-task">
+
+        <staging:nexusStagingInfo id="target-nexus"
+                                  stagingDirectory="${root.dir}/staging">
+            <staging:projectInfo groupId="org.jgroups"
+                                 artifactId="jgroups"
+                                 version="${jgroups.version}" />
+            <staging:connectionInfo
+                    baseUrl="${nexus.url}">
+                <staging:authentication
+                        username="${nexus.user}"
+                        password="${nexus.password}" />
+            </staging:connectionInfo>
+        </staging:nexusStagingInfo>
+
+
+        <echo message="use is ${nexus.user} and pwd is ${nexus.password}"/>
+
+        <staging:stageLocally>
+             <staging:nexusStagingInfo refid="target-nexus"/>
+            <fileset refid="artifacts"/>
+        </staging:stageLocally>
+        &lt;!&ndash;<staging:stageLocally>
+            <fileset dir="${dist.dir}/" includes="**/*.*"/>
+        </staging:stageLocally>&ndash;&gt;
+        <staging:stageRemotely>
+            <staging:nexusStagingInfo refid="target-nexus"/>
+        </staging:stageRemotely>
+        <staging:releaseStagingRepository autoDropAfterRelease="true">
+            <staging:nexusStagingInfo refid="target-nexus"/>
+        </staging:releaseStagingRepository>
+
+
+    </target>-->
+
+
     <target name="define-testng-task">
         <taskdef resource="testngtasks" classpathref="jg.classpath"/>
     </target>
@@ -209,7 +246,13 @@
                  uri="antlib:org.apache.ivy.ant" classpathref="jg.classpath"/>
     </target>
 
-    <target name="prepare" depends="retrieve,make-pom">
+   <!-- <target name="define-staging-task">
+        <taskdef uri="antlib:org.sonatype.nexus.ant.staging"
+                 resource="org/sonatype/nexus/ant/staging/antlib.xml" classpathref="jg.classpath">
+        </taskdef>
+    </target>
+-->
+    <target name="prepare" depends="retrieve">
         <property environment="env"/>
         <mkdir dir="${compile.dir}"/>
     	<copy file="${build.properties.file}.template" tofile="${build.properties.file}" overwrite="false"/>
@@ -218,8 +261,8 @@
 
     <target name="compile" depends="prepare" description="Compiles all Java files">
         <javac destdir="${compile.dir}"
-               source="1.7"
-               target="1.7"
+               source="1.8"
+               target="1.8"
                classpathref="jg.classpath"
                includeantruntime="false"
                debug="on"
@@ -243,8 +286,8 @@
     <target name="compile-no-unittests" depends="prepare" description="Compiles all Java files except unit tests">
         <javac srcdir="${src.dir}"
                destdir="${compile.dir}"
-               source="1.7"
-               target="1.7"
+               source="1.8"
+               target="1.8"
                classpathref="jg.classpath"
                includeantruntime="false"
                debug="on"
@@ -260,8 +303,8 @@
             depends="prepare"
             description="Compiles only tests shipped with JGroups">
         <javac destdir="${compile.dir}"
-               source="1.7"
-               target="1.7"
+               source="1.8"
+               target="1.8"
                classpathref="jg.classpath"
                includeantruntime="false"
                debug="on"
@@ -286,7 +329,7 @@
 
     <target name="jgroups.jar"
             description="Creates the jgroups.jar (includes everything)"
-            depends="clean,compile-no-unittests,compile-essential-unittests,create-schema">
+            depends="clean,compile-no-unittests,compile-essential-unittests,make-schema,make-keystore">
         <mkdir dir="${dist.dir}"/>
         <xmlproperty file="${ant.file}" collapseAttributes="true" prefix="bnd"/>
         <property name="bndclasspath" refid="jg.classpath"/>
@@ -303,14 +346,15 @@
              basedir="${compile.dir}"
              manifest="${conf.dir}/MANIFEST.MF"
              includes="org/jgroups/**">
-            <fileset dir="${conf.dir}" includes="*.xml, jg-messages*.properties, VERSION.properties"/>
+            <fileset dir="${conf.dir}" includes="*.xml, jg-messages*.properties, JGROUPS_VERSION.properties">
+                <exclude name="log4j*.xml"/>
+            </fileset>
             <fileset dir="${compile.dir}/schema">
-                <include name="*.xsd"/>
+                <include name="jgroups.xsd"/>
             </fileset>
             <fileset dir="${root.dir}">
                 <include name="INSTALL.html"/>
                 <include name="LICENSE"/>
-                <include name="README"/>
             </fileset>
             <fileset dir="${lib.dir}">
                 <include name="licenses/thirdparty*"/>
@@ -327,7 +371,7 @@
         <property name="-output" value="${conf.dir}"/>
         <taskdef resource="aQute/bnd/ant/taskdef.properties" classpathref="jg.classpath"/>
         <bnd
-              classpath=""
+              classpath="${bndclasspath}"
               eclipse="false"
               failok="false"
               exceptions="true"
@@ -338,6 +382,10 @@
              includes="org/jgroups/**">
         </jar>
     </target>
+
+
+    <target name="javadocs" description="Creates Javadoc documentation in ./dist/javadoc"
+            depends="javadoc"/>
 
 
     <target name="javadoc"
@@ -444,7 +492,7 @@
         <echo message="manual.up-to-date=${manual.up-to-date}"/>
     </target>
 
-    <target name="make-pom" description="Copies conf/pom-xml.template to pom.xml and replaces version">
+    <!--target name="make-pom" description="Copies conf/pom-xml.template to pom.xml and replaces version">
         <copy file="${pom.template}"
               tofile="${root.dir}/pom.xml"
               overwrite="false" verbose="false">
@@ -452,16 +500,12 @@
                 <filter token="VERSION" value="${version}"/>
             </filterset>
         </copy>
-    </target>
+    </target-->
 
-    <target name="make-schema" description="Creates XML schema for this version of JGroups"
-            depends="create-schema">
-    </target>
-
-	<target name="create-schema" description="Creates XML schema for this version of JGroups">
+	<target name="make-schema" description="Creates XML schema for this version of JGroups">
 		<delete dir="${compile.dir}/schema" failonerror="false"/>
 		<mkdir dir="${compile.dir}/schema"/>
-		<java classname="org.jgroups.util.XMLSchemaGenerator" classpathref="jg.classpath">
+		<java classname="org.jgroups.util.XMLSchemaGenerator" classpathref="jg.classpath" fork="true">
 			<arg line="-o ${compile.dir}/schema"/>
 		</java>
         <copy todir="${compile.dir}/schema">
@@ -469,12 +513,13 @@
                 <include name="*.xsd"/>
             </fileset>
         </copy>
-        <copy todir="${compile.dir}/schema">
+        <!-- Leave a schema named jgrous-4.x.xsd -->
+       <!-- <copy todir="${compile.dir}/schema">
             <fileset dir="${compile.dir}/schema">
                 <include name="jgroups*.xsd"/>
             </fileset>
             <globmapper from="jgroups*.xsd" to="jgroups.xsd"/>
-        </copy>
+        </copy>-->
     </target>
 
 
@@ -487,7 +532,6 @@
         <delete dir="${root.dir}/target" failonerror="false"/>
         <delete dir="${keystore.dir}" failonerror="false"/>
         <delete file="${root.dir}/velocity.log*" failonerror="false"/>
-        <delete file="${root.dir}/pom.xml" failonerror="false"/>
         <delete file="${conf.dir}/MANIFEST.MF" failonerror="false"/>
         <delete>
             <fileset dir="${root.dir}" defaultexcludes="no">
@@ -526,7 +570,7 @@
     </target>
 
 
-    <target name="makeKeystore" unless="isKeyStoreGenerated"
+    <target name="make-keystore" unless="isKeyStoreGenerated"
             depends="keyStoreGenerated, compile"
             description="Generates a temp keystore in ./keystore (for unit tests)">
         <mkdir dir="${keystore.dir}"/>
@@ -551,7 +595,7 @@
 	    </condition>
 	</target>
 
-	<target name="postcompile" depends="makeKeystore">
+	<target name="postcompile" depends="make-keystore">
 	</target>
 
     <!--
@@ -568,6 +612,7 @@
         	<antcall target="functional"/>
             <antcall target="udp"/>
             <antcall target="tcp"/>
+            <antcall target="tcp-nio"/>
             <antcall target="stack-independent"/>
             <antcall target="flush"/>
             <antcall target="time-sensitive"/>
@@ -636,12 +681,28 @@
                  initial.mcast.addr="${jgroups.udp.mcast_addr}"
                  initial.mcast.port="27000"
                  initial.tcp.port="27000"
-                 tcp.recv.buf.size="50000"
-                 tcp.send.buf.size="10000"
                  jvmarg1="-Dchannel.conf=tcp.xml"
                 />
     </target>
 
+
+    <target name="tcp-nio" depends="postcompile,define-testng-task" description="Runs TCP-NIO tests">
+        <!-- Needed to force reading of properties. Otherwise tcp-nio tests will fail -->
+        <property name="build.properties.file" value="build.properties"/>
+        <property file="${build.properties.file}"/>
+
+        <mkdir dir="${tmp.dir}/test-results/xml/tcp-nio"/>
+        <runtest suitename="tcp-nio"
+                 groups="base,stack-dependent"
+                 excludedgroups="stack-independent,flush,broken"
+                 parallel="${parallel.classes}"
+                 threadcount="5"
+                 initial.mcast.addr="${jgroups.udp.mcast_addr}"
+                 initial.mcast.port="27000"
+                 initial.tcp.port="28000"
+                 jvmarg1="-Dchannel.conf=tcp-nio.xml"
+                />
+    </target>
 
 
     <target name="time-sensitive" depends="postcompile,define-testng-task" description="Runs time-sensitive tests">
@@ -691,8 +752,8 @@
         <attribute name="initial.mcast.addr" default="${jgroups.udp.mcast_addr}"/>
         <attribute name="initial.mcast.port" default="23000"/>
         <attribute name="initial.tcp.port"   default="23000"/>
-        <attribute name="tcp.recv.buf.size"  default="200000"/>
-        <attribute name="tcp.send.buf.size"  default="64000"/>
+        <attribute name="tcp.recv.buf.size"  default="1000000"/>
+        <attribute name="tcp.send.buf.size"  default="500000"/>
         <attribute name="jvmarg1"            default="-Dnonex=1"/>
         <attribute name="jvmarg2"            default="-Dnoney=1"/>
         <!--<element   name="additional-args"    optional="true"/>-->

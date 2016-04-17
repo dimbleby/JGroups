@@ -3,11 +3,13 @@ package org.jgroups.protocols;
 import org.jgroups.Address;
 import org.jgroups.Event;
 import org.jgroups.Message;
+import org.jgroups.JChannel;
 import org.jgroups.annotations.Experimental;
 import org.jgroups.annotations.Property;
 import org.jgroups.stack.Protocol;
 import org.jgroups.util.MessageBatch;
 
+import java.io.Serializable;
 import java.util.Comparator;
 import java.util.concurrent.PriorityBlockingQueue;
 
@@ -38,7 +40,7 @@ public class PRIO extends Protocol {
     private DownMessageThread                      downMessageThread;
     private UpMessageThread                        upMessageThread;
 
-	@Property(description="The number of miliseconds to sleep before after an error occurs before sending the next message")
+	@Property(description="The number of milliseconds to sleep before after an error occurs before sending the next message")
 	private int message_failure_sleep_time = 120000; // two seconds (bela: 2 minutes, is that what you wanted ?)
 
 	@Property(description="true to prioritize outgoing messages")
@@ -50,12 +52,12 @@ public class PRIO extends Protocol {
     private Address local_addr;
 
     /**
-     * This method is called on a {@link org.jgroups.Channel#connect(String)}. Starts work.
+     * This method is called on a {@link JChannel#connect(String)}. Starts work.
      * Protocols are connected and queues are ready to receive events.
      * Will be called <em>from bottom to top</em>. This call will replace
      * the <b>START</b> and <b>START_OK</b> events.
      * @exception Exception Thrown if protocol cannot be started successfully. This will cause the ProtocolStack
-     *                      to fail, so {@link org.jgroups.Channel#connect(String)} will throw an exception
+     *                      to fail, so {@link JChannel#connect(String)} will throw an exception
      */
     public void start() throws Exception {
 		if (prioritize_down) {
@@ -72,7 +74,7 @@ public class PRIO extends Protocol {
     }
 
     /**
-     * This method is called on a {@link org.jgroups.Channel#disconnect()}. Stops work (e.g. by closing multicast socket).
+     * This method is called on a {@link JChannel#disconnect()}. Stops work (e.g. by closing multicast socket).
      * Will be called <em>from top to bottom</em>. This means that at the time of the method invocation the
      * neighbor protocol below is still working. This method will replace the
      * <b>STOP</b>, <b>STOP_OK</b>, <b>CLEANUP</b> and <b>CLEANUP_OK</b> events. The ProtocolStack guarantees that
@@ -188,7 +190,7 @@ public class PRIO extends Protocol {
 	 * <P>
 	 * The messageQueue contains the prioritized messages 
 	 */
-	private class DownMessageThread extends MessageThread {
+	private final class DownMessageThread extends MessageThread {
 		private DownMessageThread( PRIO prio, PriorityBlockingQueue<PriorityMessage> messageQueue  ) {
 			super( prio, messageQueue );
 		}
@@ -204,7 +206,7 @@ public class PRIO extends Protocol {
 	 * <P>
 	 * The messageQueue contains the prioritized messages
 	 */
-	private class UpMessageThread extends MessageThread {
+	private final class UpMessageThread extends MessageThread {
 		private UpMessageThread( PRIO prio, PriorityBlockingQueue<PriorityMessage> messageQueue  ) {
 			super( prio, messageQueue );
 		}
@@ -221,8 +223,8 @@ public class PRIO extends Protocol {
      */
     private abstract class MessageThread extends Thread
     {
-		private PRIO prio;
-		private PriorityBlockingQueue<PriorityMessage> messageQueue;
+		private final PRIO prio;
+		private final PriorityBlockingQueue<PriorityMessage> messageQueue;
         private volatile boolean running=true;
 
         private MessageThread( PRIO prio, PriorityBlockingQueue<PriorityMessage> messageQueue  ) {
@@ -270,7 +272,8 @@ public class PRIO extends Protocol {
     /**
      * Comparator for PriorityMessage's
      */
-    private static class PriorityCompare implements Comparator<PriorityMessage> {
+    private static class PriorityCompare implements Comparator<PriorityMessage>, Serializable {
+        private static final long serialVersionUID = 1L;
         /**
          * Compare two messages based on priority and time stamp in that order
          * @param msg1 - first message

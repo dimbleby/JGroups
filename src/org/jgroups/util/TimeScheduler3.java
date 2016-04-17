@@ -11,8 +11,7 @@ import java.util.concurrent.*;
 
 
 /**
- * Implementation of {@link TimeScheduler}. Based on the {@link TimeScheduler2} implementation
- * with various fixes and enhancements. Uses a {@link DelayQueue} to order tasks according to execution times
+ * Implementation of {@link TimeScheduler}. Uses a {@link DelayQueue} to order tasks according to execution times
  * @author Bela Ban
  * @since  3.3
  */
@@ -28,9 +27,9 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
 
     protected static final Log                        log=LogFactory.getLog(TimeScheduler3.class);
 
-    protected ThreadFactory                           timer_thread_factory=null;
+    protected ThreadFactory                           timer_thread_factory;
 
-    protected static enum TaskType                    {dynamic, fixed_rate, fixed_delay}
+    protected enum TaskType                           {dynamic, fixed_rate, fixed_delay}
 
 
     /**
@@ -38,7 +37,7 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
      */
     public TimeScheduler3() {
         pool=new ThreadPoolExecutor(4, 10,
-                                    5000, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>(5000),
+                                    5000, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(5000),
                                     Executors.defaultThreadFactory(), new ThreadPoolExecutor.CallerRunsPolicy());
         start();
     }
@@ -48,7 +47,7 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
                           String rejection_policy) {
         timer_thread_factory=factory;
         pool=new ThreadPoolExecutor(min_threads, max_threads,keep_alive_time, TimeUnit.MILLISECONDS,
-                                    new LinkedBlockingQueue<Runnable>(max_queue_size),
+                                    new LinkedBlockingQueue<>(max_queue_size),
                                     factory, Util.parseRejectionPolicy(rejection_policy));
         start();
     }
@@ -139,18 +138,17 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
         queue.clear();
 
         List<Runnable> remaining_tasks=pool.shutdownNow();
-        for(Runnable task: remaining_tasks) {
-            if(task instanceof Future) {
-                Future future=(Future)task;
-                future.cancel(true);
-            }
-        }
+        remaining_tasks.stream().filter(task -> task instanceof Future).forEach(task -> ((Future)task).cancel(true));
         pool.getQueue().clear();
         try {
             pool.awaitTermination(Global.THREADPOOL_SHUTDOWN_WAIT_TIME, TimeUnit.MILLISECONDS);
         }
         catch(InterruptedException e) {
         }
+
+        // clears the threads list (https://issues.jboss.org/browse/JGRP-1971)
+        if(timer_thread_factory instanceof LazyThreadFactory)
+            ((LazyThreadFactory)timer_thread_factory).destroy();
     }
 
 
@@ -166,7 +164,7 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
                 // flag is cleared and we check if the loop should be terminated at the top of the loop
             }
             catch(Throwable t) {
-                log.error("failed submitting task to thread pool", t);
+                log.error(Util.getMessage("FailedSubmittingTaskToThreadPool"), t);
             }
         }
     }
@@ -287,7 +285,7 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
                 runnable.run();
             }
             catch(Throwable t) {
-                log.error("failed executing task " + runnable, t);
+                log.error(Util.getMessage("FailedExecutingTask") + runnable, t);
             }
             finally {
                 done=true;

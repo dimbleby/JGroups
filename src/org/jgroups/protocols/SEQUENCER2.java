@@ -16,6 +16,7 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -28,6 +29,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * 
  * Todo 1: on a sequencer change, the new coordinator needs to determine the highest seqno from all members
  * Todo 2: on a sequencer change, if a member has pendindg messages in the forward-queue, they need to be resent
+ * Todo 3: this protocol is currently broken, as a new member doesn't get the highest seqno and thus creates its table
+ *         at offset=0, which means it will queue all messages higher than 0, and eventually run out of memory!!!
  * 
  * @author Bela Ban
  * @edited Andrei Palade
@@ -67,7 +70,7 @@ public class SEQUENCER2 extends Protocol {
     protected long received_responses=0;
 
     protected Table<Message>  received_msgs = new Table<>();
-    private int max_msg_batch_size = 100;
+    protected int max_msg_batch_size = 100;
 
     @ManagedAttribute
     public boolean isCoordinator() {return is_coord;}
@@ -211,7 +214,7 @@ public class SEQUENCER2 extends Protocol {
                         for(int i=0; i < hdr.num_seqnos; i++) {
                             Message bcast_msg=fwd_queue.poll();
                             if(bcast_msg == null) {
-                                log.error("received %d seqnos but fwd_queue is empty", hdr.num_seqnos);
+                                log.error(Util.getMessage("Received%DSeqnosButFwdqueueIsEmpty"), hdr.num_seqnos);
                                 break;
                             }
 
@@ -220,14 +223,12 @@ public class SEQUENCER2 extends Protocol {
                             broadcast(bcast_msg, send_seqno++);
                         }
                         int num_reqs=0;
-                        if((num_reqs=seqno_reqs.addAndGet(-hdr.num_seqnos)) > 0) {
-                            if(num_reqs > 0)
-                                sendSeqnoRequest(num_reqs);
-                        }
+                        if((num_reqs=seqno_reqs.addAndGet(-hdr.num_seqnos)) > 0 && num_reqs > 0)
+                            sendSeqnoRequest(num_reqs);
 	                    break;
                     
                     case SequencerHeader.BCAST:
-                        deliver(msg, evt, hdr);
+                        deliver(msg, hdr);
                         received_bcasts++;
                         break;
                 }
@@ -309,7 +310,7 @@ public class SEQUENCER2 extends Protocol {
                 up(new Event(Event.MSG, msg));
             }
             catch(Throwable t) {
-                log.error("failed passing up message", t);
+                log.error(Util.getMessage("FailedPassingUpMessage"), t);
             }
         }
 
@@ -329,13 +330,14 @@ public class SEQUENCER2 extends Protocol {
             return;
 
         Address existing_coord=coord, new_coord=mbrs.get(0);
-        boolean coord_changed=existing_coord == null || !existing_coord.equals(new_coord);
+        boolean coord_changed=!Objects.equals(existing_coord, new_coord);
         if(coord_changed && new_coord != null) {
             coord=new_coord;
 
             // todo: if I'm the new coord, get the highest seqno from all members. If not, re-send my pending seqno reqs
         }
-        is_coord=new_coord.equals(local_addr);
+        if(new_coord != null)
+            is_coord=new_coord.equals(local_addr);
     }
 
 
@@ -385,7 +387,7 @@ public class SEQUENCER2 extends Protocol {
 
 
 
-    protected void deliver(Message msg, Event evt, SequencerHeader hdr) {
+    protected void deliver(Message msg, SequencerHeader hdr) {
         Address sender=msg.getSrc();
         if(sender == null) {
             if(log.isErrorEnabled())

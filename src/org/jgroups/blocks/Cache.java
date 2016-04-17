@@ -1,25 +1,27 @@
 package org.jgroups.blocks;
 
-import org.jgroups.logging.Log;
-import org.jgroups.logging.LogFactory;
-import org.jgroups.annotations.Experimental;
-import org.jgroups.annotations.Unsupported;
 import org.jgroups.annotations.ManagedAttribute;
 import org.jgroups.annotations.ManagedOperation;
+import org.jgroups.logging.Log;
+import org.jgroups.logging.LogFactory;
 import org.jgroups.util.Util;
 
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.io.Externalizable;
+import java.io.IOException;
+import java.io.ObjectInput;
+import java.io.ObjectOutput;
 import java.util.*;
-import java.io.*;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Simple cache which maintains keys and value. A reaper can be enabled which periodically evicts expired entries.
  * Also, when the cache is configured to be bounded, entries in excess of the max size will be evicted on put().
  * @author Bela Ban
  */
-@Experimental
-@Unsupported
 public class Cache<K,V> {
     private static final Log log=LogFactory.getLog(Cache.class);
     private final ConcurrentMap<K,Value<V>> map=Util.createConcurrentMap();
@@ -27,7 +29,7 @@ public class Cache<K,V> {
     private Future task=null;
     private final AtomicBoolean is_reaping=new AtomicBoolean(false);
 
-    private Set<ChangeListener> change_listeners=new HashSet<>();
+    private final Set<ChangeListener> change_listeners=new LinkedHashSet<>();
 
     /** The maximum number of keys, When this value is exceeded we evict older entries, until we drop below this 
      * mark again. This effectively maintains a bounded cache. A value of 0 means don't bound the cache.
@@ -111,45 +113,43 @@ public class Cache<K,V> {
             if(rc) {
                 if(log.isTraceEnabled())
                     log.trace("reaping: max_num_entries=" + max_num_entries + ", size=" + map.size());
-                timer.execute(new Runnable() {
-                    public void run() {
-                        if(max_num_entries > 0) {
-                            try {
-                                if(map.size() > max_num_entries) {
-                                    evict(); // see if we can gracefully evict expired items
+                timer.execute(() -> {
+                    if(max_num_entries > 0) {
+                        try {
+                            if(map.size() > max_num_entries) {
+                                evict(); // see if we can gracefully evict expired items
+                            }
+                            if(map.size() > max_num_entries) {
+                                // still too many entries: now evict entries based on insertion time: oldest first
+                                int diff=map.size() - max_num_entries; // we have to evict diff entries
+                                SortedMap<Long,K> tmp=new TreeMap<>();
+                                for(Map.Entry<K,Value<V>> entry: map.entrySet()) {
+                                    tmp.put(entry.getValue().insertion_time, entry.getKey());
                                 }
-                                if(map.size() > max_num_entries) {
-                                    // still too many entries: now evict entries based on insertion time: oldest first
-                                    int diff=map.size() - max_num_entries; // we have to evict diff entries
-                                    SortedMap<Long,K> tmp=new TreeMap<>();
-                                    for(Map.Entry<K,Value<V>> entry: map.entrySet()) {
-                                        tmp.put(entry.getValue().insertion_time, entry.getKey());
-                                    }
 
-                                    Collection<K> vals=tmp.values();
-                                    for(K k: vals) {
-                                        if(diff-- > 0) {
-                                            Value<V> v=map.remove(k);
-                                            if(log.isTraceEnabled())
-                                                log.trace("evicting " + k + ": " + v.value);
-                                        }
-                                        else
-                                            break;
+                                Collection<K> vals=tmp.values();
+                                for(K k: vals) {
+                                    if(diff-- > 0) {
+                                        Value<V> v=map.remove(k);
+                                        if(log.isTraceEnabled())
+                                            log.trace("evicting " + k + ": " + v.value);
                                     }
+                                    else
+                                        break;
                                 }
-                                if(log.isTraceEnabled())
-                                    log.trace("done reaping (size=" + map.size() + ")");
                             }
-                            finally {
-                                is_reaping.set(false);
-                            }
+                            if(log.isTraceEnabled())
+                                log.trace("done reaping (size=" + map.size() + ")");
+                        }
+                        finally {
+                            is_reaping.set(false);
                         }
                     }
                 });
             }
         }
 
-        return retval != null? retval.value : null;
+        return getValue(retval);
     }
 
     @ManagedOperation
@@ -157,14 +157,13 @@ public class Cache<K,V> {
         if(log.isTraceEnabled())
             log.trace("get(" + key + ")");
         Value<V> val=map.get(key);
-        if(val == null)
-            return null;
-        if(val.timeout == -1 ||
-                (val.timeout > 0 && val.timeout < System.currentTimeMillis())) {
+
+        if (isExpired(val)) {
             map.remove(key);
             return null;
         }
-        return val.value;
+
+        return getValue(val);
     }
 
     /**
@@ -185,8 +184,7 @@ public class Cache<K,V> {
     public V remove(K key) {
         if(log.isTraceEnabled())
             log.trace("remove(" + key + ")");
-        Value<V> val=map.remove(key);
-        return val != null? val.value : null;
+        return getValue(map.remove(key));
     }
 
     public Set<Map.Entry<K,Value<V>>> entrySet() {
@@ -211,12 +209,11 @@ public class Cache<K,V> {
         return sb.toString();
     }
 
-
     public String dump() {
         StringBuilder sb=new StringBuilder();
         for(Map.Entry<K,Value<V>> entry: map.entrySet()) {
             sb.append(entry.getKey()).append(": ");
-            V val=entry.getValue().getValue();
+            V val = getValue(entry.getValue());
             if(val != null) {
                 if(val instanceof byte[])
                     sb.append(" (" + ((byte[])val).length).append(" bytes)");
@@ -233,13 +230,11 @@ public class Cache<K,V> {
         for(Iterator<Map.Entry<K,Value<V>>> it=map.entrySet().iterator(); it.hasNext();) {
             Map.Entry<K,Value<V>> entry=it.next();
             Value<V> val=entry.getValue();
-            if(val != null) {
-                if(val.timeout == -1 || (val.timeout > 0 && System.currentTimeMillis() > val.insertion_time + val.timeout)) {
-                    if(log.isTraceEnabled())
-                        log.trace("evicting " + entry.getKey() + ": " + entry.getValue().value);
-                    it.remove();
-                    evicted=true;
-                }
+            evicted = isExpired(val);
+            if (evicted) {
+                if(log.isTraceEnabled())
+                    log.trace("evicting " + entry.getKey() + ": " + getValue(val));
+                it.remove();
             }
         }
         if(evicted)
@@ -252,12 +247,19 @@ public class Cache<K,V> {
                 l.changed();
             }
             catch(Throwable t) {
-                log.error("failed notifying change listener", t);
+                log.error(Util.getMessage("FailedNotifyingChangeListener"), t);
             }
         }
     }
 
-    
+    private V getValue(Value<V> val) {
+        return val == null ? null : val.getValue();
+    }
+
+    private boolean isExpired(Value<V> val) {
+        return val != null &&
+          (val.timeout == -1 || (val.timeout > 0 && System.currentTimeMillis() > val.insertion_time + val.timeout));
+    }
 
     public static class Value<V> implements Externalizable {
         private V value;

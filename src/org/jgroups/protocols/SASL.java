@@ -1,25 +1,11 @@
 package org.jgroups.protocols;
 
-import java.util.HashMap;
-import java.util.Map;
-
-import javax.security.auth.Subject;
-import javax.security.auth.callback.CallbackHandler;
-import javax.security.auth.login.LoginContext;
-import javax.security.sasl.SaslClientFactory;
-import javax.security.sasl.SaslException;
-import javax.security.sasl.SaslServerFactory;
-
 import org.jgroups.Address;
 import org.jgroups.Event;
 import org.jgroups.Message;
 import org.jgroups.annotations.MBean;
 import org.jgroups.annotations.Property;
-import org.jgroups.auth.sasl.SaslClientCallbackHandler;
-import org.jgroups.auth.sasl.SaslClientContext;
-import org.jgroups.auth.sasl.SaslContext;
-import org.jgroups.auth.sasl.SaslServerContext;
-import org.jgroups.auth.sasl.SaslUtils;
+import org.jgroups.auth.sasl.*;
 import org.jgroups.conf.ClassConfigurator;
 import org.jgroups.conf.PropertyConverters;
 import org.jgroups.protocols.pbcast.GMS;
@@ -27,6 +13,15 @@ import org.jgroups.protocols.pbcast.GMS.GmsHeader;
 import org.jgroups.protocols.pbcast.JoinRsp;
 import org.jgroups.stack.Protocol;
 import org.jgroups.util.MessageBatch;
+
+import javax.security.auth.Subject;
+import javax.security.auth.callback.CallbackHandler;
+import javax.security.auth.login.LoginContext;
+import javax.security.sasl.SaslClientFactory;
+import javax.security.sasl.SaslException;
+import javax.security.sasl.SaslServerFactory;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * The SASL protocol implements authentication and, if requested by the mech, encryption
@@ -206,9 +201,7 @@ public class SASL extends Protocol {
     }
 
     private void cleanup() {
-        for(SaslContext context : sasl_context.values()) {
-            context.dispose();
-        }
+        sasl_context.values().forEach(SaslContext::dispose);
         sasl_context.clear();
     }
 
@@ -218,13 +211,13 @@ public class SASL extends Protocol {
             Message msg = (Message) evt.getArg();
             SaslHeader saslHeader = (SaslHeader) msg.getHeader(SASL_ID);
             GmsHeader gmsHeader = (GmsHeader) msg.getHeader(GMS_ID);
-            if (needsAuthentication(gmsHeader)) {
+            Address remoteAddress = msg.getSrc();
+            if (needsAuthentication(gmsHeader, remoteAddress)) {
                 if (saslHeader == null)
                     throw new IllegalStateException("Found GMS join or merge request but no SASL header");
                 if (!serverChallenge(gmsHeader, saslHeader, msg))
                     return null; // failed auth, don't pass up
             } else if (saslHeader != null) {
-                Address remoteAddress = msg.getSrc();
                 SaslContext saslContext = sasl_context.get(remoteAddress);
                 if (saslContext == null) {
                     throw new IllegalStateException(String.format(
@@ -251,7 +244,7 @@ public class SASL extends Protocol {
                     } catch (SaslException e) {
                         disposeContext(remoteAddress);
                         if (log.isWarnEnabled()) {
-                            log.warn("failed to validate CHALLENGE from " + remoteAddress + ", token", e);
+                            log.warn(getAddress() + ": failed to validate CHALLENGE from " + remoteAddress + ", token", e);
                         }
                     }
                     break;
@@ -299,7 +292,8 @@ public class SASL extends Protocol {
         for (Message msg : batch) {
             // If we have a join or merge request --> authenticate, else pass up
             GmsHeader gmsHeader = (GmsHeader) msg.getHeader(GMS_ID);
-            if (needsAuthentication(gmsHeader)) {
+            Address remoteAddress = msg.getSrc();
+            if (needsAuthentication(gmsHeader, remoteAddress)) {
                 SaslHeader saslHeader = (SaslHeader) msg.getHeader(id);
                 if (saslHeader == null) {
                     log.warn("Found GMS join or merge request but no SASL header");
@@ -323,10 +317,11 @@ public class SASL extends Protocol {
         case Event.MSG:
             Message msg = (Message) evt.getArg();
             GmsHeader hdr = (GmsHeader) msg.getHeader(GMS_ID);
-            if (needsAuthentication(hdr)) {
+            Address remoteAddress = msg.getDest();
+            if (needsAuthentication(hdr, remoteAddress)) {
                 // We are a client who needs to authenticate
                 SaslClientContext ctx = null;
-                Address remoteAddress = msg.getDest();
+
                 try {
                     ctx = new SaslClientContext(saslClientFactory, mech, server_name != null ? server_name : remoteAddress.toString(), client_callback_handler, sasl_props, client_subject);
                     sasl_context.put(remoteAddress, ctx);
@@ -344,10 +339,27 @@ public class SASL extends Protocol {
         return down_prot.down(evt);
     }
 
-    protected static boolean needsAuthentication(GmsHeader hdr) {
-        return (hdr != null)
-                && (hdr.getType() == GmsHeader.JOIN_REQ || hdr.getType() == GmsHeader.JOIN_REQ_WITH_STATE_TRANSFER || hdr
-                        .getType() == GmsHeader.MERGE_REQ);
+    private boolean isSelf(Address remoteAddress) {
+        return remoteAddress.equals(local_addr);
+    }
+
+    private boolean needsAuthentication(GmsHeader hdr, Address remoteAddress) {
+        if (hdr != null) {
+            switch (hdr.getType()) {
+            case GMS.GmsHeader.JOIN_REQ:
+            case GMS.GmsHeader.JOIN_REQ_WITH_STATE_TRANSFER:
+                return true;
+            case GMS.GmsHeader.MERGE_REQ:
+                return !isSelf(remoteAddress);
+            case GMS.GmsHeader.JOIN_RSP:
+            case GMS.GmsHeader.MERGE_RSP:
+                return false;
+            default:
+                return false;
+            }
+        } else {
+            return false;
+        }
     }
 
     protected boolean serverChallenge(GmsHeader gmsHeader, SaslHeader saslHeader, Message msg) {

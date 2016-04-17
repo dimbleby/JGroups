@@ -91,7 +91,6 @@ public class View implements Comparable<View>, Streamable, Iterable<Address> {
         return new View(new ViewId(coord, id), members);
     }
 
-    @Deprecated public ViewId getVid()    {return view_id;}
 
     /**
      * Returns the view ID of this view
@@ -133,7 +132,7 @@ public class View implements Comparable<View>, Streamable, Iterable<Address> {
         if(mbr == null || members == null)
             return false;
         for(Address member: members)
-            if(member != null && member.equals(mbr))
+            if(Objects.equals(member, mbr))
                 return true;
         return false;
     }
@@ -164,14 +163,6 @@ public class View implements Comparable<View>, Streamable, Iterable<Address> {
         return members.length;
     }
 
-    /**
-     * Creates a copy of a view
-     * @return
-     * @deprecated View is immutable, so copy() is unnecessary
-     */
-    @Deprecated public View copy() {
-        return this;
-    }
 
 
     public String toString() {

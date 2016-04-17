@@ -44,29 +44,23 @@ public class ParticipantGmsImpl extends ServerGmsImpl {
      * Else send handleLeave() to coord until success
      */
     public void leave(Address mbr) {
-        Address coord;
-        int max_tries=3;
-
         leave_promise.reset();
-
         if(mbr.equals(gms.local_addr))
             leaving=true;
 
-        while((coord=gms.determineCoordinator()) != null && max_tries-- > 0) {
-            if(gms.local_addr.equals(coord)) {            // I'm the coordinator
+        Address coord=gms.determineCoordinator();
+        if(coord != null) {
+            if(gms.local_addr.equals(coord)) { // I'm the coordinator
                 gms.becomeCoordinator();
-                // gms.getImpl().handleLeave(mbr, false);    // regular leave
-                gms.getImpl().leave(mbr);    // regular leave
+                gms.getImpl().leave(mbr);      // regular leave
                 return;
             }
 
             log.trace("%s: sending LEAVE request to %s", gms.local_addr, coord);
             sendLeaveMessage(coord, mbr);
             Boolean result=leave_promise.getResult(gms.leave_timeout);
-            if(result != null) {
+            if(result != null)
                 log.trace("%s: got LEAVE response from %s", gms.local_addr, coord);
-                break;
-            }
         }
         gms.becomeClient();
     }
@@ -107,26 +101,21 @@ public class ParticipantGmsImpl extends ServerGmsImpl {
 
 
     public void handleMembershipChange(Collection<Request> requests) {
-        Collection<Address> suspectedMembers=new LinkedHashSet<>(requests.size());
-        for(Request req: requests)
-            if(req.type == Request.SUSPECT)
-                suspectedMembers.add(req.mbr);
+        Collection<Address> suspectedMembers=requests.stream().filter(req -> req.type == Request.SUSPECT)
+          .collect(() -> new LinkedHashSet(requests.size()), (list,req) -> list.add(req.mbr), (l,r) -> {});
 
         if(suspectedMembers.isEmpty())
             return;
-
-        for(Address mbr: suspectedMembers)
-            if(!suspected_mbrs.contains(mbr))
-                suspected_mbrs.add(mbr);
+        suspectedMembers.stream().filter(mbr -> !suspected_mbrs.contains(mbr)).forEach(suspected_mbrs::add);
 
         if(wouldIBeCoordinator()) {
             log.debug("%s: members are %s, coord=%s: I'm the new coord !", gms.local_addr, gms.members, gms.local_addr);
 
             gms.becomeCoordinator();
-            for(Address mbr: suspected_mbrs) {
+            suspected_mbrs.forEach(mbr -> {
                 gms.getViewHandler().add(new Request(Request.SUSPECT, mbr, true));
                 gms.ack_collector.suspect(mbr);
-            }
+            });
             suspected_mbrs.clear();
         }
     }
@@ -160,7 +149,7 @@ public class ParticipantGmsImpl extends ServerGmsImpl {
      */
     boolean wouldIBeCoordinator() {
         List<Address> mbrs=gms.computeNewMembership(gms.members.getMembers(), null, null, suspected_mbrs);
-        if(mbrs.size() < 1) return false;
+        if(mbrs.isEmpty()) return false;
         Address new_coord=mbrs.get(0);
         return gms.local_addr.equals(new_coord);
     }

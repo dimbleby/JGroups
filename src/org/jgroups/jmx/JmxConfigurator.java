@@ -8,16 +8,22 @@ import org.jgroups.logging.Log;
 import org.jgroups.logging.LogFactory;
 import org.jgroups.stack.Protocol;
 import org.jgroups.stack.ProtocolStack;
+import org.jgroups.util.Util;
 
 import javax.management.*;
+
 import java.util.List;
 import java.util.Set;
 
 /**
  * @author Bela Ban, Vladimir Blagojevic
  */
-public class JmxConfigurator {
+public final class JmxConfigurator {
     static final Log log = LogFactory.getLog(JmxConfigurator.class);
+
+	private JmxConfigurator() {
+		throw new InstantiationError( "Must not instantiate this class" );
+	}
 
     /**
      * Registers an already created channel with the given MBeanServer. Wraps instance of JChannel
@@ -167,7 +173,7 @@ public class JmxConfigurator {
                     server.unregisterMBean(objName);
                 }
                 catch(InstanceNotFoundException e) {
-                    log.error("failed to unregister MBean " + e.getMessage());
+                    log.error(Util.getMessage("FailedToUnregisterMBean") + e.getMessage());
                 }
             }
 
@@ -194,11 +200,8 @@ public class JmxConfigurator {
             if(server.isRegistered(obj_name))
                 server.unregisterMBean(obj_name);
         }
-        catch (InstanceNotFoundException infe) {
+        catch (InstanceNotFoundException | MalformedObjectNameException infe) {
             throw new MBeanRegistrationException(infe);
-        }
-        catch (MalformedObjectNameException e) {
-            throw new MBeanRegistrationException(e);
         }
     }
 

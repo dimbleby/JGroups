@@ -9,7 +9,6 @@ import org.jgroups.annotations.ManagedOperation;
 import org.jgroups.util.Average;
 import org.jgroups.util.Util;
 
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -42,7 +41,7 @@ public class UFC extends FlowControl {
      */
     protected final Map<Address,Credit> sent=Util.createConcurrentMap();
 
-    protected final Average             avg_block_time=new Average(50); // in ns
+    protected final Average             avg_block_time=new Average(); // in ns
 
 
 
@@ -105,14 +104,12 @@ public class UFC extends FlowControl {
     public void resetStats() {
         super.resetStats();
         avg_block_time.clear();
-        for(Credit cred: sent.values())
-            cred.reset();
-
+        sent.values().forEach(Credit::reset);
     }
 
     protected Object handleDownMessage(final Event evt, final Message msg, Address dest, int length) {
         if(dest == null) { // 2nd line of defense, not really needed
-            log.error(getClass().getSimpleName() + " doesn't handle multicast messages; passing message down");
+            log.error("%s doesn't handle multicast messages; passing message down", getClass().getSimpleName());
             return down_prot.down(evt);
         }
 
@@ -141,17 +138,10 @@ public class UFC extends FlowControl {
         if(mbrs == null) return;
 
         // add members not in membership to received and sent hashmap (with full credits)
-        for(Address addr: mbrs) {
-            if(!sent.containsKey(addr))
-                sent.put(addr, new Credit(max_credits, avg_block_time));
-        }
+        mbrs.stream().filter(addr -> !sent.containsKey(addr)).forEach(addr -> sent.put(addr, new Credit(max_credits, avg_block_time)));
 
         // remove members that left
-        for(Iterator<Address> it=sent.keySet().iterator(); it.hasNext();) {
-            Address addr=it.next();
-            if(!mbrs.contains(addr))
-                it.remove(); // modified the underlying map
-        }
+        sent.keySet().retainAll(mbrs);
     }
 
 
@@ -160,12 +150,9 @@ public class UFC extends FlowControl {
         if(sender == null || (cred=sent.get(sender)) == null || increase <= 0)
             return;
 
-        long new_credit=Math.min(max_credits, cred.get() + increase);
         if(log.isTraceEnabled()) {
-            StringBuilder sb=new StringBuilder();
-            sb.append("received " + increase + " credits from ").append(sender).append(", old credits: ").append(cred)
-                    .append(", new credits: ").append(new_credit);
-            log.trace(sb);
+            long new_credit=Math.min(max_credits, cred.get() + increase);
+            log.trace("received %d credits from %s, old credits: %s, new credits: %d", increase, sender, cred, new_credit);
         }
         cred.increment(increase);
     }

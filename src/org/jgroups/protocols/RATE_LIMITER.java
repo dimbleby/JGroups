@@ -4,6 +4,7 @@ import org.jgroups.Event;
 import org.jgroups.Message;
 import org.jgroups.annotations.*;
 import org.jgroups.stack.Protocol;
+import org.jgroups.util.Util;
 
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -111,7 +112,7 @@ public class RATE_LIMITER extends Protocol {
             lock.lock();
             try {
                 if(len > max_bytes) {
-                    log.error("message length (" + len + " bytes) exceeded max_bytes (" + max_bytes + "); " +
+                    log.error(Util.getMessage("MessageLength") + len + " bytes) exceeded max_bytes (" + max_bytes + "); " +
                             "adjusting max_bytes to " + len);
                     max_bytes=len;
                 }
@@ -141,13 +142,9 @@ public class RATE_LIMITER extends Protocol {
             Integer tmp=map != null? (Integer)map.get("frag_size") : null;
             if(tmp != null)
                 frag_size=tmp;
-            if(frag_size > 0) {
-                if(max_bytes % frag_size != 0) {
-                    if(log.isWarnEnabled())
-                        log.warn("For optimal performance, max_bytes (" + max_bytes +
-                                   ") should be a multiple of frag_size (" + frag_size + ")");
-                }
-            }
+            if(frag_size > 0 && max_bytes % frag_size != 0)
+                log.warn("For optimal performance, max_bytes (" + max_bytes +
+                           ") should be a multiple of frag_size (" + frag_size + ")");
         }
 
         return down_prot.down(evt);

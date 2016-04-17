@@ -5,6 +5,7 @@ package org.jgroups.stack;
 
 import org.jgroups.Event;
 import org.jgroups.Message;
+import org.jgroups.JChannel;
 import org.jgroups.annotations.ManagedAttribute;
 import org.jgroups.annotations.ManagedOperation;
 import org.jgroups.annotations.Property;
@@ -26,8 +27,8 @@ import java.util.*;
 
 /**
  * The Protocol class provides a set of common services for protocol layers. Each layer has to
- * be a subclass of Protocol and override a number of methods (typically just <code>up()</code>,
- * <code>down()</code> and <code>getName()</code>. Layers are stacked in a certain order to form
+ * be a subclass of Protocol and override a number of methods (typically just {@code up()},
+ * {@code down()} and {@code getName()}. Layers are stacked in a certain order to form
  * a protocol stack. <a href=org.jgroups.Event.html>Events</a> are passed from lower
  * layers to upper ones and vice versa. E.g. a Message received by the UDP layer at the bottom
  * will be passed to its higher layer as an Event. That layer will in turn pass the Event to
@@ -58,6 +59,10 @@ public abstract class Protocol {
             "instances of it in the same stack (also change ID)",writable=false)
     protected String           name=getClass().getSimpleName();
 
+    @Property(description="Fully qualified name of a class implementing ProtocolHook, will be called after creation of " +
+      "the protocol (before init())",writable=false)
+    protected String           after_creation_hook;
+
     @Property(description="Give the protocol a different ID if needed so we can have multiple " +
             "instances of it in the same stack",writable=false)
     protected short            id=ClassConfigurator.getProtocolId(getClass());
@@ -73,23 +78,24 @@ public abstract class Protocol {
      * @param level The new level. Valid values are "fatal", "error", "warn", "info", "debug", "trace"
      * (capitalization not relevant)
      */
-    public void          setLevel(String level)            {log.setLevel(level);}
+    public Protocol      setLevel(String level)            {log.setLevel(level); return this;}
     @Property(name="level", description="logger level (see javadocs)")
     public String        getLevel()                        {return log.getLevel();}
     public Protocol      level(String level)               {this.log.setLevel(level); return this;}
     public boolean       isErgonomics()                    {return ergonomics;}
-    public void          setErgonomics(boolean ergonomics) {this.ergonomics=ergonomics;}
+    public Protocol      setErgonomics(boolean ergonomics) {this.ergonomics=ergonomics; return this;}
     public ProtocolStack getProtocolStack()                {return stack;}
     public boolean       statsEnabled()                    {return stats;}
     public void          enableStats(boolean flag)         {stats=flag;}
     public String        getName()                         {return name;}
     public short         getId()                           {return id;}
-    public void          setId(short id)                   {this.id=id;}
+    public Protocol      setId(short id)                   {this.id=id; return this;}
     public Protocol      getUpProtocol()                   {return up_prot;}
     public Protocol      getDownProtocol()                 {return down_prot;}
-    public void          setUpProtocol(Protocol prot)      {this.up_prot=prot;}
-    public void          setDownProtocol(Protocol prot)    {this.down_prot=prot;}
-    public void          setProtocolStack(ProtocolStack s) {this.stack=s;}
+    public Protocol      setUpProtocol(Protocol prot)      {this.up_prot=prot; return this;}
+    public Protocol      setDownProtocol(Protocol prot)    {this.down_prot=prot; return this;}
+    public Protocol      setProtocolStack(ProtocolStack s) {this.stack=s; return this;}
+    public String        afterCreationHook()               {return after_creation_hook;}
 
 
     public Object getValue(String name) {
@@ -120,7 +126,7 @@ public abstract class Protocol {
             return this;
         Field field=Util.getField(getClass(), name);
         if(field == null)
-            throw new IllegalArgumentException("field \"" + name + "\n not found");
+            throw new IllegalArgumentException("field " + name + " not found");
         Property prop=field.getAnnotation(Property.class);
         if(prop != null) {
             String deprecated_msg=prop.deprecatedMessage();
@@ -189,7 +195,6 @@ public abstract class Protocol {
 
     /**
      * Sets a SocketFactory. Socket factories are typically provided by the transport ({@link org.jgroups.protocols.TP})
-     * or {@link org.jgroups.protocols.TP.ProtocolAdapter}
      * @param factory
      */
     public void setSocketFactory(SocketFactory factory) {
@@ -284,18 +289,18 @@ public abstract class Protocol {
     }
 
     /**
-     * This method is called on a {@link org.jgroups.Channel#connect(String)}. Starts work.
+     * This method is called on a {@link JChannel#connect(String)}. Starts work.
      * Protocols are connected and queues are ready to receive events.
      * Will be called <em>from bottom to top</em>. This call will replace
      * the <b>START</b> and <b>START_OK</b> events.
      * @exception Exception Thrown if protocol cannot be started successfully. This will cause the ProtocolStack
-     *                      to fail, so {@link org.jgroups.Channel#connect(String)} will throw an exception
+     *                      to fail, so {@link JChannel#connect(String)} will throw an exception
      */
     public void start() throws Exception {
     }
 
     /**
-     * This method is called on a {@link org.jgroups.Channel#disconnect()}. Stops work (e.g. by closing multicast socket).
+     * This method is called on a {@link JChannel#disconnect()}. Stops work (e.g. by closing multicast socket).
      * Will be called <em>from top to bottom</em>. This means that at the time of the method invocation the
      * neighbor protocol below is still working. This method will replace the
      * <b>STOP</b>, <b>STOP_OK</b>, <b>CLEANUP</b> and <b>CLEANUP_OK</b> events. The ProtocolStack guarantees that
@@ -306,7 +311,7 @@ public abstract class Protocol {
 
 
     /**
-     * This method is called on a {@link org.jgroups.Channel#close()}.
+     * This method is called on a {@link JChannel#close()}.
      * Does some cleanup; after the call the VM will terminate
      */
     public void destroy() {
@@ -367,8 +372,8 @@ public abstract class Protocol {
      * (e.g. removing headers from a MSG event type, or updating the internal membership list
      * when receiving a VIEW_CHANGE event).
      * Finally the event is either a) discarded, or b) an event is sent down
-     * the stack using <code>down_prot.down()</code> or c) the event (or another event) is sent up
-     * the stack using <code>up_prot.up()</code>.
+     * the stack using {@code down_prot.down()} or c) the event (or another event) is sent up
+     * the stack using {@code up_prot.up()}.
      */
     public Object up(Event evt) {
         return up_prot.up(evt);
@@ -425,9 +430,9 @@ public abstract class Protocol {
      * An event is to be sent down the stack. The layer may want to examine its type and perform
      * some action on it, depending on the event's type. If the event is a message MSG, then
      * the layer may need to add a header to it (or do nothing at all) before sending it down
-     * the stack using <code>down_prot.down()</code>. In case of a GET_ADDRESS event (which tries to
+     * the stack using {@code down_prot.down()}. In case of a GET_ADDRESS event (which tries to
      * retrieve the stack's address from one of the bottom layers), the layer may need to send
-     * a new response event back up the stack using <code>up_prot.up()</code>.
+     * a new response event back up the stack using {@code up_prot.up()}.
      */
     public Object down(Event evt) {
         return down_prot.down(evt);
