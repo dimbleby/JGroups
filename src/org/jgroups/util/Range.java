@@ -6,7 +6,7 @@ import java.io.DataInput;
 import java.io.DataOutput;
 
 
-public class Range implements Streamable, Comparable<Range> {
+public class Range implements SizeStreamable, Comparable<Range> {
     public long low=-1;  // first msg to be retransmitted
     public long high=-1; // last msg to be retransmitted
 
@@ -48,7 +48,8 @@ public class Range implements Streamable, Comparable<Range> {
     }
 
     public void readFrom(DataInput in) throws Exception {
-        long[] seqnos=Bits.readLongSequence(in);
+        long[] seqnos={0,0};
+        Bits.readLongSequence(in, seqnos, 0);
         low=seqnos[0];
         high=seqnos[1];
     }

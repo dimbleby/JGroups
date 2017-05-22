@@ -5,8 +5,6 @@ import org.jgroups.Message;
 import org.jgroups.protocols.FORK;
 import org.jgroups.stack.Protocol;
 
-import java.util.Map;
-
 /**
  * Acts as bottom protool of a fork-stack. Knows about the fork-stack-id and inserts it into the ForkHeader of messages
  * sent down the stack
@@ -21,20 +19,8 @@ public class ForkProtocol extends Protocol {
     }
 
 
-    public Map<String,Object> dumpStats() {
-        return null;
-    }
-
     public Object down(Event evt) {
         switch(evt.getType()) {
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                FORK.ForkHeader hdr=(FORK.ForkHeader)msg.getHeader(FORK.ID);
-                if(hdr == null)
-                    msg.putHeader(FORK.ID, hdr=new FORK.ForkHeader(fork_stack_id, null));
-                else
-                    hdr.setForkStackId(fork_stack_id);
-                break;
             case Event.SET_LOCAL_ADDRESS:
             case Event.VIEW_CHANGE:
             case Event.CONNECT:
@@ -45,5 +31,14 @@ public class ForkProtocol extends Protocol {
                 return null; // don't propagate further down, this is only important for the main stack
         }
         return down_prot.down(evt);
+    }
+
+    public Object down(Message msg) {
+        FORK.ForkHeader hdr=msg.getHeader(FORK.ID);
+        if(hdr == null)
+            msg.putHeader(FORK.ID, hdr=new FORK.ForkHeader(fork_stack_id, null));
+        else
+            hdr.setForkStackId(fork_stack_id);
+        return down_prot.down(msg);
     }
 }

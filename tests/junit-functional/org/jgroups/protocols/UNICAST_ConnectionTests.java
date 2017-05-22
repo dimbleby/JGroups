@@ -164,7 +164,7 @@ public class UNICAST_ConnectionTests {
 
         // add a Drop protocol to drop the first unicast message
         Drop drop=new Drop(true);
-        a.getProtocolStack().insertProtocol(drop, ProtocolStack.BELOW,(Class<? extends Protocol>[])Util.getUnicastProtocols());
+        a.getProtocolStack().insertProtocol(drop, ProtocolStack.Position.BELOW,(Class<? extends Protocol>[])Util.getUnicastProtocols());
 
         // then send messages from A to B
         sendAndCheck(a, b_addr, 10, r2);
@@ -189,7 +189,7 @@ public class UNICAST_ConnectionTests {
         final List<Message> msgs=new ArrayList<>(NUM);
 
         for(int i=1; i <= NUM; i++) {
-            Message msg=new Message(b_addr, a_addr, i);
+            Message msg=new Message(b_addr, i).src(a_addr);
             Header hdr=createDataHeader(ucast, 1, (short)2, true);
             msg.putHeader(ucast.getId(), hdr);
             msgs.add(msg);
@@ -204,7 +204,7 @@ public class UNICAST_ConnectionTests {
                 public void run() {
                     try {
                         barrier.await();
-                        ucast.up(new Event(Event.MSG,msgs.get(index)));
+                        ucast.up(msgs.get(index));
                     }
                     catch(Exception e) {
                         e.printStackTrace();
@@ -245,7 +245,7 @@ public class UNICAST_ConnectionTests {
 
     protected Header createDataHeader(Protocol unicast, long seqno, short conn_id, boolean first) {
         if(unicast instanceof UNICAST3)
-            return UNICAST3.Header.createDataHeader(seqno, conn_id, first);
+            return UnicastHeader3.createDataHeader(seqno, conn_id, first);
         throw new IllegalArgumentException("protocol " + unicast.getClass().getSimpleName() + " needs to be UNICAST3");
     }
 
@@ -351,12 +351,12 @@ public class UNICAST_ConnectionTests {
             drop_next=true;
         }
 
-        public Object down(Event evt) {
-            if(drop_next && evt.getType() == Event.MSG) {
+        public Object down(Message msg) {
+            if(drop_next) {
                 drop_next=false;
                 return null;
             }
-            return super.down(evt);
+            return super.down(msg);
         }
     }
 }

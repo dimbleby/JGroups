@@ -1,13 +1,13 @@
 package org.jgroups.util;
 
 import org.jgroups.Address;
+import org.jgroups.Constructable;
 import org.jgroups.Global;
-import org.jgroups.blocks.LazyRemovalCache;
 
-import java.io.*;
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.security.SecureRandom;
-import java.util.Collection;
-import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * Logical address which is unique over space and time. <br/>
@@ -16,59 +16,15 @@ import java.util.Map;
  * 
  * @author Bela Ban
  */
-public class UUID implements Address {
-    private static final long serialVersionUID=-6194072960039354716L;
+public class UUID implements Address, Constructable<UUID> {
     protected long   mostSigBits;
     protected long   leastSigBits;
 
     /** The random number generator used by this class to create random based UUIDs */
     protected static volatile SecureRandom numberGenerator=null;
 
-    /** Keeps track of associations between logical addresses (UUIDs) and logical names */
-    protected static final LazyRemovalCache<Address,String> cache;
-
-    protected static boolean print_uuids=false;
-
     protected static final int SIZE=Global.LONG_SIZE * 2;
 
-    protected static final LazyRemovalCache.Printable<Address,LazyRemovalCache.Entry<String>> print_function
-      =(key, entry) -> entry.getVal() + ": " + (key instanceof UUID? ((UUID)key).toStringLong() : key) + "\n";
-    
-
-    static {
-        String tmp;
-
-        int max_elements=500;
-        long max_age=5000L;
-
-        try {
-            tmp=Util.getProperty(new String[]{Global.UUID_CACHE_MAX_ELEMENTS}, null, null, "500");
-            if(tmp != null)
-                max_elements=Integer.valueOf(tmp);
-        }
-        catch(Throwable t) {
-        }
-
-        try {
-            tmp=Util.getProperty(new String[]{Global.UUID_CACHE_MAX_AGE}, null, null, "120000");
-            if(tmp != null)
-                max_age=Long.valueOf(tmp);
-        }
-        catch(Throwable t) {
-        }
-
-        cache=new LazyRemovalCache<>(max_elements, max_age);
-
-
-        /* Trying to get value of jgroups.print_uuids. PropertyPermission not granted if
-        * running in an untrusted environment with JNLP */
-        try {
-            tmp=Util.getProperty(new String[]{Global.PRINT_UUIDS}, null, null, "false");
-            print_uuids=Boolean.valueOf(tmp);
-        }
-        catch (SecurityException ex){
-        }
-    }
 
 
     public UUID() {
@@ -94,44 +50,8 @@ public class UUID implements Address {
         this.leastSigBits = lsb;
     }
 
-
-    public static void add(Address uuid, String logical_name) {
-        cache.add(uuid, logical_name); // overwrite existing entry
-    }
-
-    public static void add(Map<Address,String> map) {
-        if(map == null) return;
-        for(Map.Entry<Address,String> entry: map.entrySet())
-            add(entry.getKey(), entry.getValue());
-    }
-
-    public static String get(Address logical_addr) {
-        return cache.get(logical_addr);
-    }
-
-    public static Address getByName(String logical_name) {
-        return cache.getByValue(logical_name);
-    }
-
-    /** Returns a <em>copy</em> of the cache's contents */
-    public static Map<Address,String> getContents() {
-        return cache.contents();
-    }
-
-    public static void remove(Address addr) {
-        cache.remove(addr);
-    }
-
-    public static void removeAll(Collection<Address> mbrs) {
-        cache.removeAll(mbrs);
-    }
-
-    public static void retainAll(Collection<Address> logical_addrs) {
-        cache.retainAll(logical_addrs);
-    }
-
-    public static String printCache() {
-        return cache.printCache(print_function);
+    public Supplier<? extends UUID> create() {
+        return UUID::new;
     }
 
 
@@ -141,7 +61,7 @@ public class UUID implements Address {
      * @return  A randomly generated {@code UUID}
      */
     public static UUID randomUUID() {
-        return new UUID(generateRandomBytes());
+        return new UUID(generateRandomBytes(16));
     }
 
 
@@ -161,9 +81,7 @@ public class UUID implements Address {
 
 
     public String toString() {
-        if(print_uuids)
-            return toStringLong();
-        String val=cache.get(this);
+        String val=NameCache.get(this);
         return val != null? val : toStringLong();
     }
 
@@ -297,18 +215,8 @@ public class UUID implements Address {
         mostSigBits=in.readLong();
     }
 
-    public void writeExternal(ObjectOutput out) throws IOException {
-        out.writeLong(leastSigBits);
-        out.writeLong(mostSigBits);
-    }
 
-    public void readExternal(ObjectInput in) throws IOException, ClassNotFoundException {
-        leastSigBits=in.readLong();
-        mostSigBits=in.readLong();
-    }
-
-
-    public int size() {
+    public int serializedSize() {
         return SIZE;
     }
 
@@ -317,12 +225,15 @@ public class UUID implements Address {
     }
 
 
-    protected static byte[] generateRandomBytes() {
+    public static byte[] generateRandomBytes() {
+        return generateRandomBytes(16);
+    }
+    public static byte[] generateRandomBytes(int size) {
         SecureRandom ng=numberGenerator;
         if(ng == null)
             numberGenerator=ng=new SecureRandom();
 
-        byte[] randomBytes=new byte[16];
+        byte[] randomBytes=new byte[size];
         ng.nextBytes(randomBytes);
         return randomBytes;
     }

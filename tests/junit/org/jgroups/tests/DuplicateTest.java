@@ -86,7 +86,7 @@ public class DuplicateTest extends ChannelTestBase {
 
 
     public void testRegularMulticastToAll() throws Exception {
-        send(a, null /** multicast */, false, 10);
+        send(a, null, false, 10);
         sendStableMessages(a,b,c);
         check(r1, 1, false, new Tuple<>(a1, 10));
         check(r2, 1, false, new Tuple<>(a1, 10));
@@ -95,7 +95,7 @@ public class DuplicateTest extends ChannelTestBase {
 
 
     public void testOOBMulticastToAll() throws Exception {
-        send(a, null /** multicast */, true, 10);
+        send(a, null, true, 10);
         sendStableMessages(a,b,c);
         check(r1,1,true,new Tuple<>(a1,10));
         check(r2, 1, true, new Tuple<>(a1, 10));
@@ -104,9 +104,9 @@ public class DuplicateTest extends ChannelTestBase {
 
 
     public void testRegularMulticastToAll3Senders() throws Exception {
-        send(a, null /** multicast */, false, 10);
-        send(b, null /** multicast */, false, 10);
-        send(c, null /** multicast */, false, 10);
+        send(a, null, false, 10);
+        send(b, null, false, 10);
+        send(c, null, false, 10);
         sendStableMessages(a,b,c);
         check(r1, 3, false, new Tuple<>(a1, 10), new Tuple<>(a2, 10), new Tuple<>(a3, 10));
         check(r2, 3, false, new Tuple<>(a1, 10), new Tuple<>(a2, 10), new Tuple<>(a3, 10));
@@ -115,9 +115,9 @@ public class DuplicateTest extends ChannelTestBase {
 
     @Test(invocationCount=5)
     public void testOOBMulticastToAll3Senders() throws Exception {
-        send(a, null /** multicast */, true, 10);
-        send(b, null /** multicast */, true, 10);
-        send(c, null /** multicast */, true, 10);
+        send(a, null, true, 10);
+        send(b, null, true, 10);
+        send(c, null, true, 10);
         sendStableMessages(a,b,c);
         check(r1, 3, true, new Tuple<>(a1, 10), new Tuple<>(a2, 10), new Tuple<>(a3, 10));
         check(r2, 3, true, new Tuple<>(a1, 10), new Tuple<>(a2, 10), new Tuple<>(a3, 10));
@@ -125,9 +125,9 @@ public class DuplicateTest extends ChannelTestBase {
     }
 
     public void testMixedMulticastsToAll3Members() throws Exception {
-        send(a, null /** multicast */, false, true, 10);
-        send(b, null /** multicast */, false, true, 10);
-        send(c, null /** multicast */, false, true, 10);
+        send(a, null, false, true, 10);
+        send(b, null, false, true, 10);
+        send(c, null, false, true, 10);
         sendStableMessages(a,b,c);
         check(r1, 3, true, new Tuple<>(a1, 10), new Tuple<>(a2, 10), new Tuple<>(a3, 10));
         check(r2, 3, true, new Tuple<>(a1, 10), new Tuple<>(a2, 10), new Tuple<>(a3, 10));
@@ -142,7 +142,7 @@ public class DuplicateTest extends ChannelTestBase {
      private static void send(JChannel sender_channel, Address dest, boolean oob, boolean mixed, int num_msgs) throws Exception {
          long seqno=1;
          for(int i=0; i < num_msgs; i++) {
-             Message msg=new Message(dest, null, seqno++);
+             Message msg=new Message(dest, seqno++);
              if(mixed) {
                  if(i % 2 == 0)
                      msg.setFlag(Message.Flag.OOB);
@@ -158,7 +158,7 @@ public class DuplicateTest extends ChannelTestBase {
 
     private static void sendStableMessages(JChannel ... channels) {
         for(JChannel ch: channels) {
-            STABLE stable=(STABLE)ch.getProtocolStack().findProtocol(STABLE.class);
+            STABLE stable=ch.getProtocolStack().findProtocol(STABLE.class);
             if(stable != null)
                 stable.gc();
         }
@@ -166,7 +166,7 @@ public class DuplicateTest extends ChannelTestBase {
 
     protected static void removeDUPL(JChannel ... channels) {
         for(JChannel ch: channels) {
-            DUPL dupl=(DUPL)ch.getProtocolStack().findProtocol(DUPL.class);
+            DUPL dupl=ch.getProtocolStack().findProtocol(DUPL.class);
             if(dupl != null) {
                 dupl.setCopyMulticastMsgs(false);
                 dupl.setCopyUnicastMsgs(false);
@@ -180,7 +180,7 @@ public class DuplicateTest extends ChannelTestBase {
         a=createChannel(true, 3, "A");
         DUPL dupl=new DUPL(copy_multicasts, copy_unicasts, num_incoming_copies, num_outgoing_copies);
         ProtocolStack stack=a.getProtocolStack();
-        stack.insertProtocol(dupl,ProtocolStack.BELOW,NAKACK2.class);
+        stack.insertProtocol(dupl,ProtocolStack.Position.BELOW,NAKACK2.class);
 
         b=createChannel(a, "B");
         c=createChannel(a, "C");
@@ -189,11 +189,12 @@ public class DuplicateTest extends ChannelTestBase {
         b.connect("DuplicateTest");
         c.connect("DuplicateTest");
 
-        Util.waitUntilAllChannelsHaveSameSize(20000, 1000,a,b, c);
+        Util.waitUntilAllChannelsHaveSameView(20000, 1000, a, b, c);
     }
 
 
-    private void check(MyReceiver receiver, int expected_size, boolean oob, Tuple<Address,Integer>... vals) {
+    @SafeVarargs
+    private final void check(MyReceiver receiver, int expected_size, boolean oob, Tuple<Address,Integer>... vals) {
         Map<Address, Collection<Long>> msgs=receiver.getMsgs();
 
         for(int i=0; i < 10; i++) {
@@ -263,7 +264,7 @@ public class DuplicateTest extends ChannelTestBase {
 
         public void receive(Message msg) {
             Address addr=msg.getSrc();
-            Long val=(Long)msg.getObject();
+            Long val=msg.getObject();
 
             Collection<Long> list=msgs.get(addr);
             if(list == null) {

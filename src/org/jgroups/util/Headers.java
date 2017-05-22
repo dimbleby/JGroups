@@ -36,14 +36,14 @@ public final class Headers {
      * @param id The ID
      * @return
      */
-    public static Header getHeader(final Header[] hdrs, short id) {
+    public static <T extends Header> T getHeader(final Header[] hdrs, short id) {
         if(hdrs == null)
             return null;
         for(Header hdr: hdrs) {
             if(hdr == null)
                 return null;
             if(hdr.getProtId() == id)
-                return hdr;
+                return (T)hdr;
         }
         return null;
     }
@@ -153,7 +153,7 @@ public final class Headers {
             if(hdr == null)
                 break;
             retval+=Global.SHORT_SIZE *2;    // for protocol ID and magic number
-            retval+=hdr.size();
+            retval+=hdr.serializedSize();
         }
         return retval;
     }

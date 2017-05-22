@@ -76,7 +76,7 @@ public class UNICAST_MessagesToSelfTest {
                                  new STABLE().setValue("max_bytes", 50000),
                                  new GMS().setValue("print_local_addr", false));
         if(discard != null)
-            ch.getProtocolStack().insertProtocol(discard, ProtocolStack.ABOVE, SHARED_LOOPBACK.class);
+            ch.getProtocolStack().insertProtocol(discard, ProtocolStack.Position.ABOVE, SHARED_LOOPBACK.class);
         return ch;
     }
 
@@ -88,7 +88,7 @@ public class UNICAST_MessagesToSelfTest {
         final Receiver r=new Receiver();
         ch.setReceiver(r);
         for(int i=1; i <= NUM_MSGS; i++) {
-            Message msg=new Message(a1, null, createPayload(SIZE, i)); // unicast message
+            Message msg=new Message(a1, createPayload(SIZE, i)); // unicast message
             ch.send(msg);
             if(i % 1000 == 0)
                 System.out.println("==> " + i);

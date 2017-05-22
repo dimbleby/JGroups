@@ -246,7 +246,7 @@ public class ReconciliationTest {
         DISCARD discard=new DISCARD().localAddress(ch.getAddress());
         discard.setExcludeItself(true);
         discard.addIgnoreMember(exclude); // ignore messages from this member
-        ch.getProtocolStack().insertProtocol(discard, ProtocolStack.BELOW, NAKACK2.class);
+        ch.getProtocolStack().insertProtocol(discard, ProtocolStack.Position.BELOW, NAKACK2.class);
     }
 
     private static void removeDISCARD(JChannel...channels) throws Exception {
@@ -290,7 +290,7 @@ public class ReconciliationTest {
         JChannel b = createChannel("B");
         Cache cache_2 = new Cache(b, "cache-2");
         b.connect("testVirtualSynchrony");
-        Util.waitUntilAllChannelsHaveSameSize(10000, 500, a, b);
+        Util.waitUntilAllChannelsHaveSameView(10000, 500, a, b);
 
         // start adding messages
         flush(a); // flush all pending message out of the system so everyone receives them
@@ -348,7 +348,7 @@ public class ReconciliationTest {
         }
 
         protected void put(Object key, Object val) throws Exception {
-            ch.send(new Message(null, null, new Object[]{key,val}));
+            ch.send(new Message(null, new Object[]{key,val}));
         }
 
         protected int size() {

@@ -5,6 +5,7 @@ import org.jgroups.util.Util;
 import java.util.*;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -48,6 +49,20 @@ public class LazyRemovalCache<K,V> {
             added=map.put(key, new Entry<>(val)) == null; // overwrite existing element (new timestamp, and possible removable mark erased)
         checkMaxSizeExceeded();
         return added;
+    }
+
+    public void addAll(Map<K,V> m) {
+        if(m == null)
+            return;
+        for(Map.Entry<K,V> entry: m.entrySet()) {
+            K key=entry.getKey();
+            V val=entry.getValue();
+            map.put(key, new Entry<>(val));
+        }
+    }
+
+    public Set<Map.Entry<K, Entry<V>>> entrySet() {
+        return map.entrySet();
     }
 
     public boolean containsKey(K key) {
@@ -274,7 +289,11 @@ public class LazyRemovalCache<K,V> {
         }
 
         public String toString() {
-            StringBuilder sb=new StringBuilder(val.toString()).append(" (");
+            return toString(null);
+        }
+
+        public String toString(Function<V,String> print_val) {
+            StringBuilder sb=new StringBuilder(print_val != null? print_val.apply(val) : val.toString()).append(" (");
             long age=TimeUnit.MILLISECONDS.convert(System.nanoTime() - timestamp, TimeUnit.NANOSECONDS);
             if(age < 1000)
                 sb.append(age).append(" ms");
@@ -283,5 +302,6 @@ public class LazyRemovalCache<K,V> {
             sb.append(" old").append((removable? ", removable" : "")).append(")");
             return sb.toString();
         }
+
     }
 }

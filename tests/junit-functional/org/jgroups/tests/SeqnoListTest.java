@@ -113,7 +113,7 @@ public class SeqnoListTest {
         System.out.println("list.size()=" + list.size()  + "\nlist = " + list);
         int expected_size=list.serializedSize();
         byte[] buf=Util.streamableToByteBuffer(list);
-        SeqnoList list2=(SeqnoList)Util.streamableFromByteBuffer(SeqnoList.class,buf);
+        SeqnoList list2=Util.streamableFromByteBuffer(SeqnoList.class, buf);
         System.out.println("list2.size()=" + list2.size() + "\nlist2 = " + list2);
         assert list.size() == list2.size();
 
@@ -126,6 +126,32 @@ public class SeqnoListTest {
             assert seq1 == seq2;
         }
     }
+
+    public void testSerialization2() {
+        SeqnoList list=new SeqnoList(8000);
+        for(int i=0; i < 8000; i++)
+            list.add(i);
+        System.out.println("list = " + list);
+        assert list.size() == 8000;
+        int serialized_size=list.serializedSize();
+        System.out.println("serialized_size = " + serialized_size);
+    }
+
+    public void testSerialization3() {
+        int max_bundle_size=64000;
+        int estimated_max_msgs_in_xmit_req=(max_bundle_size -50) * Global.LONG_SIZE;
+
+        SeqnoList list=new SeqnoList(estimated_max_msgs_in_xmit_req);
+        for(int i=0; i < estimated_max_msgs_in_xmit_req; i++)
+            list.add(i);
+        System.out.println("list = " + list);
+        assert list.size() == estimated_max_msgs_in_xmit_req;
+        int serialized_size=list.serializedSize();
+        System.out.println("serialized_size = " + serialized_size);
+        assert serialized_size <= max_bundle_size;
+    }
+
+
 
     protected static void _testIteration(SeqnoList list, List<Long> expected) {
         System.out.println("list = " + list);

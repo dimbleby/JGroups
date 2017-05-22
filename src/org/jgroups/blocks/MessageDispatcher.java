@@ -6,7 +6,6 @@ import org.jgroups.logging.Log;
 import org.jgroups.logging.LogFactory;
 import org.jgroups.protocols.TP;
 import org.jgroups.protocols.relay.SiteAddress;
-import org.jgroups.stack.DiagnosticsHandler;
 import org.jgroups.stack.Protocol;
 import org.jgroups.stack.StateTransferInfo;
 import org.jgroups.util.*;
@@ -14,9 +13,7 @@ import org.jgroups.util.*;
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.TimeoutException;
-import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 
@@ -39,7 +36,7 @@ import java.util.stream.Stream;
  *
  * @author Bela Ban
  */
-public class MessageDispatcher implements RequestHandler, ChannelListener, Closeable {
+public class MessageDispatcher implements RequestHandler, Closeable, ChannelListener {
     protected JChannel                              channel;
     protected RequestCorrelator                     corr;
     protected MembershipListener                    membership_listener;
@@ -51,10 +48,7 @@ public class MessageDispatcher implements RequestHandler, ChannelListener, Close
     protected volatile Collection<Address>          members=new HashSet<>();
     protected Address                               local_addr;
     protected final Log                             log=LogFactory.getLog(MessageDispatcher.class);
-    protected boolean                               hardware_multicast_supported=false;
-    protected final Set<ChannelListener>            channel_listeners=new CopyOnWriteArraySet<>();
     protected final RpcStats                        rpc_stats=new RpcStats(false);
-    protected final DiagnosticsHandler.ProbeHandler probe_handler=new MyProbeHandler();
     protected static final RspList                  empty_rsplist=new RspList();
     protected static final GroupRequest             empty_group_request;
 
@@ -71,11 +65,10 @@ public class MessageDispatcher implements RequestHandler, ChannelListener, Close
         this.channel=channel;
         prot_adapter=new ProtocolAdapter();
         if(channel != null) {
-            local_addr=channel.getAddress();
             channel.addChannelListener(this);
-        }
-        if(channel != null)
+            local_addr=channel.getAddress();
             installUpHandler(prot_adapter, true);
+        }
         start();
     }
 
@@ -86,59 +79,86 @@ public class MessageDispatcher implements RequestHandler, ChannelListener, Close
     }
 
 
+    public JChannel          getChannel()                 {return channel;}
+    public RequestCorrelator getCorrelator()              {return corr;}
+    public RequestCorrelator correlator()                 {return corr;}
+    public boolean           getAsyncDispatching()        {return async_dispatching;}
+    public boolean           asyncDispatching()           {return async_dispatching;}
+    public boolean           getWrapExceptions()          {return wrap_exceptions;}
+    public boolean           wrapExceptions()             {return wrap_exceptions;}
+    public UpHandler         getProtocolAdapter()         {return prot_adapter;}
+    public UpHandler         protocolAdapter()            {return prot_adapter;}
+    public RpcStats          getRpcStats()                {return rpc_stats;}
+    public RpcStats          rpcStats()                   {return rpc_stats;}
+    public boolean           getExtendedStats()           {return rpc_stats.extendedStats();}
+    public boolean           extendedStats()              {return rpc_stats.extendedStats();}
+    public <X extends MessageDispatcher> X setExtendedStats(boolean fl) {return extendedStats(fl);}
+    public <X extends MessageDispatcher> X extendedStats(boolean fl)    {rpc_stats.extendedStats(fl); return (X)this;}
 
-    public RpcStats          rpcStats()                {return rpc_stats;}
-    public MessageDispatcher extendedStats(boolean fl) {rpc_stats.extendedStats(fl); return this;}
-    public boolean           extendedStats()           {return rpc_stats.extendedStats();}
-    public boolean           asyncDispatching()        {return async_dispatching;}
+    public <X extends MessageDispatcher> X setChannel(JChannel ch) {
+        if(ch == null)
+            return (X)this;
+        this.channel=ch;
+        if(ch != null) {
+            local_addr=channel.getAddress();
+            ch.addChannelListener(this);
+        }
+        if(prot_adapter == null)
+            prot_adapter=new ProtocolAdapter();
+        // Don't force installing the UpHandler so subclasses can use this method
+        return installUpHandler(prot_adapter, false);
+    }
 
-    public MessageDispatcher asyncDispatching(boolean flag) {
+    public <X extends MessageDispatcher> X setCorrelator(RequestCorrelator c) {return correlator(c);}
+    public <X extends MessageDispatcher> X correlator(RequestCorrelator c) {
+        if(c == null)
+            return (X)this;
+        stop();
+        this.corr=c;
+        corr.asyncDispatching(this.async_dispatching).wrapExceptions(this.wrap_exceptions);
+        start();
+        return (X)this;
+    }
+
+    public <X extends MessageDispatcher> X setMembershipListener(MembershipListener l) {
+        membership_listener=l;
+        return (X)this;
+    }
+
+    public <X extends MessageDispatcher> X setStateListener(StateListener sl) {
+        this.state_listener=sl;
+        return (X)this;
+    }
+
+    public <X extends MessageDispatcher> X setRequestHandler(RequestHandler rh) {
+        req_handler=rh;
+        return (X)this;
+    }
+
+    public <X extends MessageDispatcher> X setAsynDispatching(boolean flag) {return asyncDispatching(flag);}
+    public <X extends MessageDispatcher> X asyncDispatching(boolean flag) {
         async_dispatching=flag;
         if(corr != null)
             corr.asyncDispatching(flag);
-        return this;
+        return (X)this;
     }
 
-    public boolean                  wrapExceptions()               {return wrap_exceptions;}
-    public MessageDispatcher        wrapExceptions(boolean flag)   {
+    public <X extends MessageDispatcher> X setWrapExceptions(boolean flag) {return wrapExceptions(flag);}
+    public <X extends MessageDispatcher> X wrapExceptions(boolean flag) {
         wrap_exceptions=flag;
         if(corr != null)
             corr.wrapExceptions(flag);
-        return this;}
-
-    public UpHandler getProtocolAdapter() {
-        return prot_adapter;
+        return (X)this;
     }
 
-
-
-    /**
-     * If this dispatcher is using a user-provided PullPushAdapter, then need to set the members from the adapter
-     * initially since viewChange has most likely already been called in PullPushAdapter.
-     */
-    protected void setMembers(List<Address> new_mbrs) {
+    protected <X extends MessageDispatcher> X setMembers(List<Address> new_mbrs) {
         if(new_mbrs != null)
             members=new HashSet<>(new_mbrs); // volatile write - seen by a subsequent read
+        return (X)this;
     }
 
 
-    /**
-     * Adds a new channel listener to be notified on the channel's state change.
-     */
-    public void addChannelListener(ChannelListener l) {
-        if(l != null)
-            channel_listeners.add(l);
-    }
-
-
-    public void removeChannelListener(ChannelListener l) {
-        if(l != null)
-            channel_listeners.remove(l);
-    }
-
-
-
-    public void start() {
+    public <X extends MessageDispatcher> X start() {
         if(corr == null)
             corr=createRequestCorrelator(prot_adapter, this, local_addr)
               .asyncDispatching(async_dispatching).wrapExceptions(this.wrap_exceptions);
@@ -152,10 +172,8 @@ public class MessageDispatcher implements RequestHandler, ChannelListener, Close
                 TP transport=channel.getProtocolStack().getTransport();
                 corr.registerProbeHandler(transport);
             }
-            TP transport=channel.getProtocolStack().getTransport();
-            hardware_multicast_supported=transport.supportsMulticasting();
-            transport.registerProbeHandler(probe_handler);
         }
+        return (X)this;
     }
 
     protected static RequestCorrelator createRequestCorrelator(Protocol transport, RequestHandler handler, Address local_addr) {
@@ -168,48 +186,17 @@ public class MessageDispatcher implements RequestHandler, ChannelListener, Close
 
     @Override public void close() throws IOException {stop();}
 
-    public void stop() {
-        if(corr != null)
+    public <X extends MessageDispatcher> X stop() {
+        if(corr != null) {
             corr.stop();
-
-        if(channel instanceof JChannel) {
-            TP transport=channel.getProtocolStack().getTransport();
-            transport.unregisterProbeHandler(probe_handler);
-            if(corr != null)
+            if(channel instanceof JChannel) {
+                TP transport=channel.getProtocolStack().getTransport();
                 corr.unregisterProbeHandler(transport);
+            }
         }
+        return (X)this;
     }
 
-
-    public MessageDispatcher setMembershipListener(MembershipListener l) {
-        membership_listener=l;
-        return this;
-    }
-
-    public MessageDispatcher setStateListener(StateListener sl) {
-        this.state_listener=sl;
-        return this;
-    }
-
-    public MessageDispatcher setRequestHandler(RequestHandler rh) {
-        req_handler=rh;
-        return this;
-    }
-
-    public JChannel getChannel() {
-        return channel;
-    }
-
-    public void setChannel(JChannel ch) {
-        if(ch == null)
-            return;
-        this.channel=ch;
-        local_addr=channel.getAddress();
-        if(prot_adapter == null)
-            prot_adapter=new ProtocolAdapter();
-        // Don't force installing the UpHandler so subclasses can use this method
-        installUpHandler(prot_adapter, false);
-    }
 
     /**
      * Sets the given UpHandler as the UpHandler for the channel. If the relevant handler is already installed,
@@ -222,7 +209,7 @@ public class MessageDispatcher implements RequestHandler, ChannelListener, Close
      * @param canReplace {@code true} if an existing Channel upHandler can be replaced; {@code false}
      *              if this method shouldn't install
      */
-    protected void installUpHandler(UpHandler handler, boolean canReplace) {
+    protected <X extends MessageDispatcher> X installUpHandler(UpHandler handler, boolean canReplace) {
         UpHandler existing = channel.getUpHandler();
         if (existing == null)
             channel.setUpHandler(handler);
@@ -230,6 +217,7 @@ public class MessageDispatcher implements RequestHandler, ChannelListener, Close
             log.warn("Channel already has an up handler installed (%s) but now it is being overridden", existing);
             channel.setUpHandler(handler);
         }
+        return (X)this;
     }
 
 
@@ -474,35 +462,6 @@ public class MessageDispatcher implements RequestHandler, ChannelListener, Close
 
 
 
-    /* --------------------- Interface ChannelListener ---------------------- */
-
-    @Override
-    public void channelConnected(JChannel channel) {
-        notifyListener(false, channel, this::channelConnected);
-    }
-
-    @Override
-    public void channelDisconnected(JChannel channel) {
-        notifyListener(true, channel, this::channelDisconnected);
-    }
-
-    @Override
-    public void channelClosed(JChannel channel) {
-        notifyListener(true, channel, this::channelClosed);
-    }
-
-    protected void notifyListener(boolean stop, JChannel ch, Consumer<JChannel> cons) {
-        if(stop)
-            stop();
-        channel_listeners.forEach(l -> {
-            try {cons.accept(ch);}
-            catch(Throwable t) {
-                log.warn("notifying channel listener " + l + " failed", t);
-            }
-        });
-    }
-
-    /* ----------------------------------------------------------------------- */
 
     protected void updateStats(Collection<Address> dests, boolean anycast, boolean sync, long time) {
         if(anycast)
@@ -524,7 +483,7 @@ public class MessageDispatcher implements RequestHandler, ChannelListener, Close
 
             case Event.GET_STATE_OK:
                 if(state_listener != null) {
-                    StateTransferResult result=(StateTransferResult)evt.getArg();
+                    StateTransferResult result=evt.getArg();
                     if(result.hasBuffer()) {
                         ByteArrayInputStream input=new ByteArrayInputStream(result.getBuffer());
                         state_listener.setState(input);
@@ -533,19 +492,19 @@ public class MessageDispatcher implements RequestHandler, ChannelListener, Close
                 break;
 
             case Event.STATE_TRANSFER_OUTPUTSTREAM:
-                OutputStream os=(OutputStream)evt.getArg();
+                OutputStream os=evt.getArg();
                 if(state_listener != null && os != null)
                     state_listener.getState(os);
                 break;
 
             case Event.STATE_TRANSFER_INPUTSTREAM:
-                InputStream is=(InputStream)evt.getArg();
+                InputStream is=evt.getArg();
                 if(state_listener != null && is!=null)
                     state_listener.setState(is);
                 break;
 
             case Event.VIEW_CHANGE:
-                View v=(View) evt.getArg();
+                View v=evt.getArg();
                 List<Address> new_mbrs=v.getMembers();
                 setMembers(new_mbrs);
                 if(membership_listener != null)
@@ -554,12 +513,12 @@ public class MessageDispatcher implements RequestHandler, ChannelListener, Close
 
             case Event.SET_LOCAL_ADDRESS:
                 log.trace("setting local_addr (%s) to %s", local_addr, evt.getArg());
-                local_addr=(Address)evt.getArg();
+                local_addr=evt.getArg();
                 break;
 
             case Event.SUSPECT:
                 if(membership_listener != null)
-                    membership_listener.suspect((Address) evt.getArg());
+                    membership_listener.suspect(evt.getArg());
                 break;
 
             case Event.BLOCK:
@@ -575,47 +534,16 @@ public class MessageDispatcher implements RequestHandler, ChannelListener, Close
         return null;
     }
 
+    public void channelConnected(JChannel channel) {
+        ;
+    }
 
-    protected class MyProbeHandler implements DiagnosticsHandler.ProbeHandler {
+    public void channelDisconnected(JChannel channel) {
+        stop();
+    }
 
-        @Override
-        public Map<String,String> handleProbe(String... keys) {
-            Map<String,String> retval=new LinkedHashMap<>(16);
-            for(String key: keys) {
-                switch(key) {
-                    case "rpcs":
-                        String channel_name=channel != null? channel.getClusterName() : "";
-                        retval.put(channel_name + ": sync  unicast   RPCs", String.valueOf(rpc_stats.unicasts(true)));
-                        retval.put(channel_name + ": sync  multicast RPCs", String.valueOf(rpc_stats.multicasts(true)));
-                        retval.put(channel_name + ": async unicast   RPCs", String.valueOf(rpc_stats.unicasts(false)));
-                        retval.put(channel_name + ": async multicast RPCs", String.valueOf(rpc_stats.multicasts(false)));
-                        retval.put(channel_name + ": sync  anycast   RPCs", String.valueOf(rpc_stats.anycasts(true)));
-                        retval.put(channel_name + ": async anycast   RPCs", String.valueOf(rpc_stats.anycasts(false)));
-                        break;
-                    case "rpcs-reset":
-                        rpc_stats.reset();
-                        break;
-                    case "rpcs-enable-details":
-                        rpc_stats.extendedStats(true);
-                        break;
-                    case "rpcs-disable-details":
-                        rpc_stats.extendedStats(false);
-                        break;
-                    case "rpcs-details":
-                        if(!rpc_stats.extendedStats())
-                            retval.put(key, "<details not enabled: use rpcs-enable-details to enable>");
-                        else
-                            retval.put(key, rpc_stats.printOrderByDest());
-                        break;
-                }
-            }
-            return retval;
-        }
-
-        @Override
-        public String[] supportedKeys() {
-            return new String[]{"rpcs", "rpcs-reset", "rpcs-enable-details", "rpcs-disable-details", "rpcs-details"};
-        }
+    public void channelClosed(JChannel channel) {
+        stop();
     }
 
 
@@ -646,6 +574,12 @@ public class MessageDispatcher implements RequestHandler, ChannelListener, Close
             return null;
         }
 
+        public Object up(Message msg) {
+            if(corr != null)
+                corr.receiveMessage(msg);
+            return null;
+        }
+
         public void up(MessageBatch batch) {
             if(corr == null)
                 return;
@@ -654,16 +588,19 @@ public class MessageDispatcher implements RequestHandler, ChannelListener, Close
 
         @Override
         public Object down(Event evt) {
+            return channel != null? channel.down(evt) : null;
+        }
+
+        public Object down(Message msg) {
             if(channel != null) {
-                if(evt.getType() == Event.MSG && !(channel.isConnected() || channel.isConnecting())) {
+                if(!(channel.isConnected() || channel.isConnecting())) {
                     // return null;
                     throw new IllegalStateException("channel is not connected");
                 }
-                return channel.down(evt);
+                return channel.down(msg);
             }
             return null;
         }
-
 
         /* ----------------------- End of Protocol Interface ------------------------ */
 

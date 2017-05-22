@@ -7,7 +7,7 @@ import org.jgroups.util.AsciiString;
 
 import java.io.DataInput;
 import java.io.DataOutput;
-
+import java.util.function.Supplier;
 
 
 /**
@@ -35,11 +35,17 @@ public class TpHeader extends Header {
         cluster_name=n;
     }
 
+    public Supplier<? extends Header> create() {return TpHeader::new;}
+
+    public short getMagicId() {return 60;}
+
     public String toString() {
-        return "[cluster_name=" + new String(cluster_name) + ']';
+        return String.format("[cluster_name=%s]", new String(cluster_name));
     }
 
-    public int size() {
+    public byte[] getClusterName() {return cluster_name;}
+
+    public int serializedSize() {
         return cluster_name != null? Global.SHORT_SIZE + cluster_name.length : Global.SHORT_SIZE;
     }
 

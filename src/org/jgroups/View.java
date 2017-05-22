@@ -4,12 +4,14 @@ package org.jgroups;
 
 import org.jgroups.annotations.Immutable;
 import org.jgroups.util.ArrayIterator;
-import org.jgroups.util.Streamable;
+import org.jgroups.util.SizeStreamable;
 import org.jgroups.util.Util;
 
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.util.*;
+import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 /**
  * A view is a local representation of the current membership of a group. Only one view is installed
@@ -22,7 +24,7 @@ import java.util.*;
  * @author Bela Ban
  */
 @Immutable
-public class View implements Comparable<View>, Streamable, Iterable<Address> {
+public class View implements Comparable<View>, SizeStreamable, Iterable<Address>, Constructable<View> {
 
    /**
     * A view is uniquely identified by its ViewID. The view id contains the creator address and a
@@ -91,6 +93,9 @@ public class View implements Comparable<View>, Streamable, Iterable<Address> {
         return new View(new ViewId(coord, id), members);
     }
 
+    public Supplier<? extends View> create() {
+        return View::new;
+    }
 
     /**
      * Returns the view ID of this view
@@ -104,13 +109,13 @@ public class View implements Comparable<View>, Streamable, Iterable<Address> {
      * if this view was created with the empty constructur, null will be returned
      * @return the creator of this view in form of an Address object
      */
-    public Address getCreator() {
-        return view_id.getCreator();
-    }
+    public Address getCreator() {return view_id.getCreator();}
+
+    public Address getCoord() {return members.length > 0? members[0] : null;}
 
     /**
      * Returns the member list
-     * @return an unmodifiable list
+     * @return an immutable list of the members
      */
     public List<Address> getMembers() {
         return Collections.unmodifiableList(Arrays.asList(members));
@@ -135,6 +140,17 @@ public class View implements Comparable<View>, Streamable, Iterable<Address> {
             if(Objects.equals(member, mbr))
                 return true;
         return false;
+    }
+
+    /** Returns true if all mbrs are elements of this view, false otherwise */
+    public boolean containsMembers(Address ... mbrs) {
+        if(mbrs == null || members == null)
+            return false;
+        for(Address mbr: mbrs) {
+            if(!containsMember(mbr))
+                return false;
+        }
+        return true;
     }
 
 
@@ -197,13 +213,20 @@ public class View implements Comparable<View>, Streamable, Iterable<Address> {
      * Returns a list of members which left from view one to two
      * @param one
      * @param two
-     * @return
      */
     public static List<Address> leftMembers(View one, View two) {
         if(one == null || two == null)
             return null;
         List<Address> retval=new ArrayList<>(one.getMembers());
         retval.removeAll(two.getMembers());
+        return retval;
+    }
+
+    public static List<Address> newMembers(View old, View new_view) {
+        if(old == null || new_view == null)
+            return null;
+        List<Address> retval=new ArrayList<>(new_view.getMembers());
+        retval.removeAll(old.getMembers());
         return retval;
     }
 
@@ -216,6 +239,8 @@ public class View implements Comparable<View>, Streamable, Iterable<Address> {
     public static Address[][] diff(final View from, final View to) {
         if(to == null)
             throw new IllegalArgumentException("the second view cannot be null");
+        if(from == to)
+            return new Address[][]{{},{}};
         if(from == null) {
             Address[] joined=new Address[to.size()];
             int index=0;
@@ -254,8 +279,36 @@ public class View implements Comparable<View>, Streamable, Iterable<Address> {
         return new Address[][]{joined != null? joined : new Address[]{}, left != null? left : new Address[]{}};
     }
 
+    /** Returns true if all views are the same. Uses the view IDs for comparison */
+    public static boolean sameViews(View ... views) {
+        ViewId first_view_id=views[0].getViewId();
+        return Stream.of(views).allMatch(v -> v.getViewId().equals(first_view_id));
+    }
+
+    public static boolean sameViews(Collection<View> views) {
+        ViewId first_view_id=views.iterator().next().getViewId();
+        return views.stream().allMatch(v -> v.getViewId().equals(first_view_id));
+    }
+
+    /** Checks if two views have the same members regardless of order. E.g. {A,B,C} and {B,A,C} returns true */
+    public static boolean sameMembers(View v1, View v2) {
+        if(v1 == v2)
+            return true;
+        if(v1.size() != v2.size())
+            return false;
+        Address[][] diff=diff(v1, v2);
+        return diff[0].length == 0 && diff[1].length == 0;
+    }
+
+    /** Checks if two views have the same members observing order. E.g. {A,B,C} and {B,A,C} returns false,
+     * {A,C,B} and {A,C,B} returns true */
+    public static boolean sameMembersOrdered(View v1, View v2) {
+        return Arrays.equals(v1.getMembersRaw(), v2.getMembersRaw());
+    }
+
     public Iterator<Address> iterator() {
         return new ArrayIterator(this.members);
     }
+
 
 }

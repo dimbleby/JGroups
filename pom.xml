@@ -5,7 +5,7 @@
     <artifactId>jgroups</artifactId>
     <packaging>bundle</packaging>
     <name>JGroups</name>
-    <version>4.0.0-SNAPSHOT</version>
+    <version>4.0.3.Final</version>
     <url>http://www.jgroups.org</url>
 
     <properties>
@@ -84,21 +84,6 @@
         </repository>
 
         <repository>
-            <id>jboss-releases-repository</id>
-            <name>JBoss Public Maven Repository Staging</name>
-            <url>https://repository.jboss.org/nexus/service/local/staging/deploy/maven2</url>
-            <layout>default</layout>
-            <releases>
-                <enabled>true</enabled>
-                <updatePolicy>never</updatePolicy>
-            </releases>
-            <snapshots>
-                <enabled>true</enabled>
-                <updatePolicy>interval:120</updatePolicy>
-            </snapshots>
-        </repository>
-
-        <repository>
             <id>jboss-snapshots-repository</id>
             <name>JBoss Nexus snapshots repository</name>
             <url>https://repository.jboss.org/nexus/content/repositories/snapshots/</url>
@@ -120,7 +105,19 @@
         <dependency>
             <groupId>org.apache.logging.log4j</groupId>
             <artifactId>log4j-core</artifactId>
-            <version>2.0</version>
+            <version>[2.0,)</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-api</artifactId>
+            <version>[2.0,)</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>[1.7,)</version>
             <optional>true</optional>
         </dependency>
 
@@ -128,19 +125,13 @@
         <dependency>
             <groupId>org.testng</groupId>
             <artifactId>testng</artifactId>
-            <version>6.8.5</version>
+            <version>[6.9,)</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.jboss.byteman</groupId>
             <artifactId>byteman-bmunit</artifactId>
-            <version>2.1.4.1</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>bouncycastle</groupId>
-            <artifactId>bcprov-jdk15</artifactId>
-            <version>140</version>
+            <version>[3,)</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -338,7 +329,6 @@
                             schema;version=${project.version},
                             ${project.groupId}.*;version=${project.version}
                         </Export-Package>
-                        <Bundle-RequiredExecutionEnvironment>JavaSE-1.7</Bundle-RequiredExecutionEnvironment>
                     </instructions>
                 </configuration>
             </plugin>

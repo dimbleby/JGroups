@@ -15,6 +15,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 /**
  * Failure detection based on simple heartbeat protocol. Every member periodically (interval ms) multicasts a heartbeat.
@@ -77,6 +79,8 @@ public class FD_ALL2 extends Protocol {
     protected Future<?>                        timeout_checker_future;
 
     protected final Lock                       lock=new ReentrantLock();
+
+    protected final Predicate<Message>         HAS_HEADER=msg -> msg.getHeader(this.id) != null;
 
     protected final BoundedList<Tuple<Address,Long>> suspect_history=new BoundedList<>(20);
 
@@ -159,34 +163,28 @@ public class FD_ALL2 extends Protocol {
     }
 
 
-    public Object up(Event evt) {
-        switch(evt.getType()) {
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                Address sender=msg.getSrc();
-
-                Header hdr=msg.getHeader(this.id);
-                if(hdr != null) {
-                    update(sender); // updates the heartbeat entry for 'sender'
-                    num_heartbeats_received++;
-                    unsuspect(sender);
-                    return null; // consume heartbeat message, do not pass to the layer above
-                }
-                else if(msg_counts_as_heartbeat) {
-                    // message did not originate from FD_ALL2 layer, but still count as heartbeat
-                    update(sender); // update when data is received too ? maybe a bit costly
-                    if(has_suspected_mbrs)
-                        unsuspect(sender);
-                }
-                break; // pass message to the layer above
+    public Object up(Message msg) {
+        Address sender=msg.getSrc();
+        Header hdr=msg.getHeader(this.id);
+        if(hdr != null) {
+            update(sender); // updates the heartbeat entry for 'sender'
+            num_heartbeats_received++;
+            unsuspect(sender);
+            return null; // consume heartbeat message, do not pass to the layer above
         }
-        return up_prot.up(evt); // pass up to the layer above us
+        else if(msg_counts_as_heartbeat) {
+            // message did not originate from FD_ALL2 layer, but still count as heartbeat
+            update(sender); // update when data is received too ? maybe a bit costly
+            if(has_suspected_mbrs)
+                unsuspect(sender);
+        }
+        return up_prot.up(msg); // pass up to the layer above us
     }
 
 
     public void up(MessageBatch batch) {
-        Collection<Message> msgs=batch.getMatchingMessages(id, true);
-        if((msgs != null && !msgs.isEmpty()) || msg_counts_as_heartbeat) {
+        int matched_msgs=batch.replaceIf(HAS_HEADER, null, true);
+        if(matched_msgs > 0 || msg_counts_as_heartbeat) {
             update(batch.sender());
             num_heartbeats_received++;
             if(has_suspected_mbrs)
@@ -201,14 +199,14 @@ public class FD_ALL2 extends Protocol {
         switch(evt.getType()) {
             case Event.VIEW_CHANGE:
                 down_prot.down(evt);
-                View v=(View)evt.getArg();
+                View v=evt.getArg();
                 handleViewChange(v);
                 return null;
             case Event.SET_LOCAL_ADDRESS:
-                local_addr=(Address)evt.getArg();
+                local_addr=evt.getArg();
                 break;
             case Event.UNSUSPECT:
-                Address mbr=(Address)evt.getArg();
+                Address mbr=evt.getArg();
                 unsuspect(mbr);
                 update(mbr);
                 break;
@@ -220,7 +218,7 @@ public class FD_ALL2 extends Protocol {
         lock.lock();
         try {
             if(!isTimeoutCheckerRunning()) {
-                timeout_checker_future=timer.scheduleWithFixedDelay(new TimeoutChecker(), timeout, timeout, TimeUnit.MILLISECONDS);
+                timeout_checker_future=timer.scheduleWithFixedDelay(new TimeoutChecker(), timeout, timeout, TimeUnit.MILLISECONDS, false);
             }
         }
         finally {
@@ -246,7 +244,8 @@ public class FD_ALL2 extends Protocol {
         lock.lock();
         try {
             if(!isHeartbeatSenderRunning()) {
-                heartbeat_sender_future=timer.scheduleWithFixedDelay(new HeartbeatSender(), 1000, interval, TimeUnit.MILLISECONDS);
+                heartbeat_sender_future=timer.scheduleWithFixedDelay(new HeartbeatSender(), 1000, interval, TimeUnit.MILLISECONDS,
+                                                                     getTransport() instanceof TCP);
             }
         }
         finally {
@@ -375,8 +374,10 @@ public class FD_ALL2 extends Protocol {
 
     public static class HeartbeatHeader extends Header {
         public HeartbeatHeader() {}
+        public short getMagicId() {return 63;}
+        public Supplier<? extends Header> create() {return HeartbeatHeader::new;}
         public String toString() {return "heartbeat";}
-        public int size() {return 0;}
+        public int serializedSize() {return 0;}
         public void writeTo(DataOutput out) throws Exception {}
         public void readFrom(DataInput in) throws Exception {}
     }
@@ -388,7 +389,7 @@ public class FD_ALL2 extends Protocol {
     class HeartbeatSender implements Runnable {
         public void run() {
             Message heartbeat=new Message().setFlag(Message.Flag.INTERNAL).putHeader(id, new HeartbeatHeader());
-            down_prot.down(new Event(Event.MSG, heartbeat));
+            down_prot.down(heartbeat);
             num_heartbeats_sent++;
         }
 

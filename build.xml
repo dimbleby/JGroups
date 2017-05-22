@@ -280,8 +280,18 @@
             <src path="${perf.dir}"/>
             <src path="${util.dir}"/>
         </javac>
+        <antcall target="copy-conf-dir"/>
     </target>
 
+    <target name="copy-conf-dir" description="Copies the relevant files from ./conf to ./classes">
+        <copy todir="${compile.dir}/">
+            <fileset dir="${conf.dir}" includes="*.xml, *.properties, *.btm">
+                <include name="scripts/**"/>
+                <exclude name="log4j*.xml"/>
+                <exclude name="settings.xml"/>
+            </fileset>
+        </copy>
+    </target>
 
     <target name="compile-no-unittests" depends="prepare" description="Compiles all Java files except unit tests">
         <javac srcdir="${src.dir}"
@@ -297,6 +307,7 @@
                includes="org/jgroups/**">
             <exclude name="**/obsolete/**"/>
         </javac>
+        <antcall target="copy-conf-dir"/>
     </target>
 
     <target name="compile-essential-unittests"
@@ -316,6 +327,7 @@
             <src path="${tests.dir}/other"/>
             <exclude name="**/obsolete/**"/>
         </javac>
+        <antcall target="copy-conf-dir"/>
     </target>
 
 
@@ -329,7 +341,7 @@
 
     <target name="jgroups.jar"
             description="Creates the jgroups.jar (includes everything)"
-            depends="clean,compile-no-unittests,compile-essential-unittests,make-schema,make-keystore">
+            depends="compile-no-unittests,compile-essential-unittests,make-schema,make-keystore-no-compile">
         <mkdir dir="${dist.dir}"/>
         <xmlproperty file="${ant.file}" collapseAttributes="true" prefix="bnd"/>
         <property name="bndclasspath" refid="jg.classpath"/>
@@ -348,16 +360,10 @@
              includes="org/jgroups/**">
             <fileset dir="${conf.dir}" includes="*.xml, jg-messages*.properties, JGROUPS_VERSION.properties">
                 <exclude name="log4j*.xml"/>
+                <exclude name="settings.xml"/>
             </fileset>
             <fileset dir="${compile.dir}/schema">
                 <include name="jgroups.xsd"/>
-            </fileset>
-            <fileset dir="${root.dir}">
-                <include name="INSTALL.html"/>
-                <include name="LICENSE"/>
-            </fileset>
-            <fileset dir="${lib.dir}">
-                <include name="licenses/thirdparty*"/>
             </fileset>
         </jar>
     </target>
@@ -507,6 +513,7 @@
 		<mkdir dir="${compile.dir}/schema"/>
 		<java classname="org.jgroups.util.XMLSchemaGenerator" classpathref="jg.classpath" fork="true">
 			<arg line="-o ${compile.dir}/schema"/>
+			<jvmarg value="-Djava.awt.headless=true"/>
 		</java>
         <copy todir="${compile.dir}/schema">
             <fileset dir="${conf.dir}">
@@ -570,8 +577,22 @@
     </target>
 
 
-    <target name="make-keystore" unless="isKeyStoreGenerated"
-            depends="keyStoreGenerated, compile"
+    <target name="make-keystore" unless="isKeyStoreGenerated" depends="keyStoreGenerated,compile"
+            description="Generates a temp keystore in ./keystore (for unit tests)">
+        <mkdir dir="${keystore.dir}"/>
+        <java classname="org.jgroups.demos.KeyStoreGenerator" fork="false">
+            <arg value="--storeName"/>
+            <arg value="keystore/defaultStore.keystore"/>
+            <classpath refid="jg.classpath"/>
+        </java>
+        <java classname="org.jgroups.demos.KeyStoreGenerator" fork="false">
+            <arg value="--storeName"/>
+            <arg value="keystore/defaultStore2.keystore"/>
+            <classpath refid="jg.classpath"/>
+        </java>
+    </target>
+
+    <target name="make-keystore-no-compile" unless="isKeyStoreGenerated" depends="keyStoreGenerated"
             description="Generates a temp keystore in ./keystore (for unit tests)">
         <mkdir dir="${keystore.dir}"/>
         <java classname="org.jgroups.demos.KeyStoreGenerator" fork="false">

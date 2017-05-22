@@ -8,13 +8,13 @@ import org.jgroups.annotations.Property;
 import org.jgroups.stack.IpAddress;
 import org.jgroups.stack.Protocol;
 import org.jgroups.util.*;
-import org.jgroups.util.UUID;
 
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.util.*;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -137,22 +137,8 @@ public class RELAY extends Protocol {
 
     public Object down(Event evt) {
         switch(evt.getType()) {
-
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                Address dest=msg.getDest();
-                if(dest == null)
-                    break;
-
-                // forward non local destinations to the coordinator, to relay to the remote cluster
-                if(!isLocal(dest)) {
-                    forwardToCoord(msg);
-                    return null;
-                }
-                break;
-
             case Event.VIEW_CHANGE:
-                handleView((View)evt.getArg());
+                handleView(evt.getArg());
                 break;
 
             case Event.DISCONNECT:
@@ -160,7 +146,7 @@ public class RELAY extends Protocol {
                 break;
 
             case Event.SET_LOCAL_ADDRESS:
-                local_addr=(Address)evt.getArg();
+                local_addr=evt.getArg();
                 break;
 
             case Event.GET_PHYSICAL_ADDRESS:
@@ -175,30 +161,23 @@ public class RELAY extends Protocol {
         return down_prot.down(evt);
     }
 
+    public Object down(Message msg) {
+        Address dest=msg.getDest();
+        if(dest == null)
+            return down_prot.down(msg);
+
+        // forward non local destinations to the coordinator, to relay to the remote cluster
+        if(!isLocal(dest)) {
+            forwardToCoord(msg);
+            return null;
+        }
+        return down_prot.down(msg);
+    }
 
     public Object up(Event evt) {
         switch(evt.getType()) {
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                Address dest=msg.getDest();
-                RelayHeader hdr=(RelayHeader)msg.getHeader(getId());
-                if(hdr != null)
-                    return handleUpEvent(msg, hdr);
-
-                if(is_coord && relay && dest == null && !msg.isFlagSet(Message.Flag.NO_RELAY)) {
-                    Message tmp=msg.copy(true, Global.BLOCKS_START_ID); // we only copy headers from building blocks
-                    try {
-                        byte[] buf=Util.streamableToByteBuffer(tmp);
-                        forward(buf, 0, buf.length);
-                    }
-                    catch(Exception e) {
-                        log.warn("failed relaying message", e);
-                    }
-                }
-                break;
-
             case Event.VIEW_CHANGE:
-                handleView((View)evt.getArg()); // already sends up new view if needed
+                handleView(evt.getArg()); // already sends up new view if needed
                 if(present_global_views)
                     return null;
                 else
@@ -208,39 +187,33 @@ public class RELAY extends Protocol {
     }
 
 
-    protected Object handleUpEvent(Message msg, RelayHeader hdr) {
-        switch(hdr.type) {
-            case DISSEMINATE:
-                Message copy=msg.copy();
-                if(hdr.original_sender != null)
-                    copy.setSrc(hdr.original_sender);
-                return up_prot.up(new Event(Event.MSG, copy));
+    public Object up(Message msg) {
+        Address dest=msg.getDest();
+        RelayHeader hdr=msg.getHeader(getId());
+        if(hdr != null)
+            return handleUpEvent(msg, hdr);
 
-            case FORWARD:
-                if(is_coord)
-                    forward(msg.getRawBuffer(), msg.getOffset(), msg.getLength());
-                break;
-
-            case VIEW:
-                return installView(msg.getRawBuffer(), msg.getOffset(), msg.getLength());
-
-            case BROADCAST_VIEW:
-                break;
-
-            default:
-                throw new IllegalArgumentException(hdr.type + " is not a valid type");
+        if(is_coord && relay && dest == null && !msg.isFlagSet(Message.Flag.NO_RELAY)) {
+            Message tmp=msg.copy(true, Global.BLOCKS_START_ID); // we only copy headers from building blocks
+            try {
+                byte[] buf=Util.streamableToByteBuffer(tmp);
+                forward(buf, 0, buf.length);
+            }
+            catch(Exception e) {
+                log.warn("failed relaying message", e);
+            }
         }
-        return null;
+        return up_prot.up(msg);
     }
-
 
     public void up(MessageBatch batch) {
         for(Message msg: batch) {
-            RelayHeader hdr=(RelayHeader)msg.getHeader(getId());
+            RelayHeader hdr=msg.getHeader(getId());
             if(hdr != null) {
                 batch.remove(msg);
                 try {
                     handleUpEvent(msg, hdr);
+                    continue; // fix for https://issues.jboss.org/browse/JGRP-2073
                 }
                 catch(Throwable t) {
                     log.error(Util.getMessage("FailedProcessingMessage"), t);
@@ -262,6 +235,32 @@ public class RELAY extends Protocol {
         if(!batch.isEmpty())
             up_prot.up(batch);
     }
+
+    protected Object handleUpEvent(Message msg, RelayHeader hdr) {
+        switch(hdr.type) {
+            case DISSEMINATE:
+                Message copy=msg.copy();
+                if(hdr.original_sender != null)
+                    copy.setSrc(hdr.original_sender);
+                return up_prot.up(copy);
+
+            case FORWARD:
+                if(is_coord)
+                    forward(msg.getRawBuffer(), msg.getOffset(), msg.getLength());
+                break;
+
+            case VIEW:
+                return installView(msg.getRawBuffer(), msg.getOffset(), msg.getLength());
+
+            case BROADCAST_VIEW:
+                break;
+
+            default:
+                throw new IllegalArgumentException(hdr.type + " is not a valid type");
+        }
+        return null;
+    }
+
 
     protected void handleView(final View view) {
         List<Address> new_mbrs=null;
@@ -298,9 +297,9 @@ public class RELAY extends Protocol {
 
     protected Object installView(byte[] buf, int offset, int length) {
         try {
-            ViewData data=(ViewData)Util.streamableFromByteBuffer(ViewData.class, buf, offset, length);
+            ViewData data=Util.streamableFromByteBuffer(ViewData.class, buf, offset, length);
             if(data.uuids != null)
-                UUID.add(data.uuids);
+                NameCache.add(data.uuids);
 
             remote_view=data.remote_view;
             if(global_view == null || (data.global_view != null &&!global_view.equals(data.global_view))) {
@@ -322,7 +321,7 @@ public class RELAY extends Protocol {
 
     /** Forwards the message across the TCP link to the other local cluster */
     protected void forward(byte[] buffer, int offset, int length) {
-        Message msg=new Message(null, null, buffer, offset, length).putHeader(id, new RelayHeader(RelayHeader.Type.FORWARD));
+        Message msg=new Message(null, buffer, offset, length).putHeader(id, new RelayHeader(RelayHeader.Type.FORWARD));
         if(bridge != null) {
             try {
                 bridge.send(msg);
@@ -348,9 +347,9 @@ public class RELAY extends Protocol {
                     return;
                 }
 
-                tmp=new Message(coord, null, buf, 0, buf.length); // reusing tmp is OK here ...
-                tmp.putHeader(id, new RelayHeader(RelayHeader.Type.FORWARD));
-                down_prot.down(new Event(Event.MSG, tmp));
+                tmp=new Message(coord, buf, 0, buf.length) // reusing tmp is OK here ...
+                  .putHeader(id, new RelayHeader(RelayHeader.Type.FORWARD));
+                down_prot.down(tmp);
             }
         }
         catch(Exception e) {
@@ -427,7 +426,6 @@ public class RELAY extends Protocol {
             bridge.setDiscardOwnMessages(true); // don't receive my own messages
             bridge.setReceiver(new Receiver());
             bridge.connect(bridge_name);
-
         }
         catch(Exception e) {
             log.error(Util.getMessage("FailedCreatingBridgeChannelProps") + bridge_props + ")", e);
@@ -437,7 +435,7 @@ public class RELAY extends Protocol {
 
     protected void sendOnLocalCluster(byte[] buf, int offset, int length) {
         try {
-            Message msg=(Message)Util.streamableFromByteBuffer(Message.class, buf, offset, length);
+            Message msg=Util.streamableFromByteBuffer(Message.class, buf, offset, length);
             Address sender=msg.getSrc();
             Address dest=msg.getDest();
 
@@ -456,7 +454,7 @@ public class RELAY extends Protocol {
             if(log.isTraceEnabled())
                 log.trace("received msg from " + sender + ", passing down the stack with dest=" +
                             msg.getDest() + " and src=" + msg.getSrc());
-            down_prot.down(new Event(Event.MSG, msg));
+            down_prot.down(msg);
         }
         catch(Exception e) {
             log.error(Util.getMessage("FailedSendingOnLocalCluster"), e);
@@ -493,7 +491,7 @@ public class RELAY extends Protocol {
     protected void sendViewOnLocalCluster(final List<Address> destinations, final byte[] buffer) {
         for(Address dest: destinations) {
             Message view_msg=new Message(dest, buffer).putHeader(id, RelayHeader.create(RelayHeader.Type.VIEW));
-            down_prot.down(new Event(Event.MSG, view_msg));
+            down_prot.down(view_msg);
         }
     }
 
@@ -530,7 +528,7 @@ public class RELAY extends Protocol {
             if(bridge.getAddress().equals(sender)) // discard my own messages
                 return;
 
-            RelayHeader hdr=(RelayHeader)msg.getHeader(id);
+            RelayHeader hdr=msg.getHeader(id);
             switch(hdr.type) {
                 case DISSEMINATE: // should not occur here, but we'll ignore it anyway
                     break;
@@ -539,8 +537,8 @@ public class RELAY extends Protocol {
                     break;
                 case VIEW:
                     try {
-                        ViewData data=(ViewData)Util.streamableFromByteBuffer(ViewData.class, msg.getRawBuffer(),
-                                                                              msg.getOffset(), msg.getLength());
+                        ViewData data=Util.streamableFromByteBuffer(ViewData.class, msg.getRawBuffer(),
+                                                                    msg.getOffset(), msg.getLength());
                         // replace addrs with proxies
                         if(data.remote_view != null) {
                             List<Address> mbrs=data.remote_view.getMembers().stream().collect(Collectors.toCollection(LinkedList::new));
@@ -628,9 +626,12 @@ public class RELAY extends Protocol {
             retval.original_sender=original_sender;
             return retval;
         }
+        public short getMagicId() {return 70;}
+        public Supplier<? extends Header> create() {
+            return RelayHeader::new;
+        }
 
-
-        public int size() {
+        public int serializedSize() {
             int retval=Global.BYTE_SIZE; // type
             switch(type) {
                 case DISSEMINATE:
@@ -701,7 +702,7 @@ public class RELAY extends Protocol {
         }
 
         public static ViewData create(View remote_view, View global_view) {
-            Map<Address,String> tmp=UUID.getContents();
+            Map<Address,String> tmp=NameCache.getContents();
             return new ViewData(remote_view, global_view, tmp);
         }
 

@@ -1,7 +1,7 @@
 
 package org.jgroups;
 
-import org.jgroups.util.Streamable;
+import org.jgroups.util.SizeStreamable;
 
 /**
  * Header is a JGroups internal base class for all JGroups headers. Client normally do not need to
@@ -10,24 +10,20 @@ import org.jgroups.util.Streamable;
  * @author Bela Ban
  * @since 2.0
  */
-public abstract class Header implements Streamable {
+public abstract class Header implements SizeStreamable, Constructable<Header> {
     /** The ID of the protocol which added a header to a message. Set externally, e.g. by {@link Message#putHeader(short,Header)} */
     protected short prot_id;
 
     public short  getProtId()         {return prot_id;}
     public Header setProtId(short id) {this.prot_id=id; return this;}
 
+    /** Returns the magic-ID. If defined in jg-magic-map.xml, the IDs need to be the same */
+    public abstract short getMagicId();
 
-    /**
-     * To be implemented by subclasses. Return the size of this object for the serialized version of it.
-     * I.e. how many bytes this object takes when flattened into a buffer. This may be different for each instance,
-     * or can be the same. This may also just be an estimation. E.g. FRAG uses it on Message to determine whether
-     * or not to fragment the message. Fragmentation itself will be accurate, because the entire message will actually
-     * be serialized into a byte buffer, so we can determine the exact size.
-     */
-    public abstract int size();
-
-
+    /** @deprecated Headers should implement {@link SizeStreamable#serializedSize()} instead */
+    @Deprecated public int size() {
+        return serializedSize();
+    }
 
     public String toString() {
         return '[' + getClass().getSimpleName() + "]";

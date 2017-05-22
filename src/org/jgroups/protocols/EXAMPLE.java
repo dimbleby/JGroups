@@ -11,9 +11,7 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.util.ArrayList;
 import java.util.List;
-
-
-
+import java.util.function.Supplier;
 
 
 /**
@@ -32,30 +30,7 @@ public class EXAMPLE extends Protocol {
     }
 
 
-    public Object up(Event evt) {
-        switch(evt.getType()) {
-
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                // Do something with the event, e.g. extract the message and remove a header.
-                // Optionally pass up
-                break;
-        }
-
-        return up_prot.up(evt);            // Pass up to the layer above us
-    }
-
-    public void up(MessageBatch batch) {
-        for(Message msg: batch) {
-            // do something; perhaps check for the presence of a header
-        }
-
-        if(!batch.isEmpty())
-            up_prot.up(batch);
-    }
-
     public Object down(Event evt) {
-
         switch(evt.getType()) {
             case Event.TMP_VIEW:
             case Event.VIEW_CHANGE:
@@ -66,22 +41,39 @@ public class EXAMPLE extends Protocol {
                         members.addAll(new_members);
                 }
                 return down_prot.down(evt);
-
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                // Do something with the event, e.g. add a header to the message
-                // Optionally pass down
-                break;
         }
-
         return down_prot.down(evt);          // Pass on to the layer below us
     }
+
+    public Object down(Message msg) {
+        // Do something with the event, e.g. add a header to the message
+        // Optionally pass down
+        return down_prot.down(msg);
+    }
+
+    public Object up(Message msg) {
+        // Do something with the event, e.g. extract the message and remove a header.
+        // Optionally pass up
+        return up_prot.up(msg);            // Pass up to the layer above us
+    }
+
+    public void up(MessageBatch batch) {
+        for(Message msg: batch) {
+            // do something; perhaps check for the presence of a header
+        }
+        if(!batch.isEmpty())
+            up_prot.up(batch);
+    }
+
 
 
     public static class ExampleHeader extends Header {
         // your variables
 
-        public int size() {
+
+        public Supplier<? extends Header> create() {return ExampleHeader::new;}
+        public short getMagicId() {return 21000;}
+        public int serializedSize() {
             return 0; // return serialized size of all variables sent across the wire
         }
 

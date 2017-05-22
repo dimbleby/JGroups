@@ -3,6 +3,7 @@ package org.jgroups.tests;
 import org.jgroups.Event;
 import org.jgroups.Global;
 import org.jgroups.JChannel;
+import org.jgroups.Message;
 import org.jgroups.blocks.ReplicatedHashMap;
 import org.jgroups.blocks.atomic.Counter;
 import org.jgroups.blocks.atomic.CounterService;
@@ -52,7 +53,7 @@ public class ForkChannelTest {
                 "hijack-stack",
                 "lead-hijacker",
                 true,
-                ProtocolStack.ABOVE,
+                ProtocolStack.Position.ABOVE,
                 FRAG2.class);
         assert fc.isOpen() && !fc.isConnected() && !fc.isClosed() : "state=" + fc.getState();
 
@@ -116,7 +117,7 @@ public class ForkChannelTest {
     }
 
     public void testRefcount() throws Exception {
-        FORK fork=(FORK)a.getProtocolStack().findProtocol(FORK.class);
+        FORK fork=a.getProtocolStack().findProtocol(FORK.class);
         Protocol prot=fork.get("stack");
         assert prot == null;
         fc1=new ForkChannel(a, "stack", "fc1");
@@ -175,7 +176,7 @@ public class ForkChannelTest {
 
         assert p1.inits == 1 && p2.inits == 1;
 
-        FORK fork=(FORK)a.getProtocolStack().findProtocol(FORK.class);
+        FORK fork=a.getProtocolStack().findProtocol(FORK.class);
         Protocol prot=fork.get("stack");
         ForkProtocolStack fork_stack=(ForkProtocolStack)getProtStack(prot);
         int inits=fork_stack.getInits();
@@ -261,9 +262,10 @@ public class ForkChannelTest {
      * @throws Exception
      */
     public void testCounterService() throws Exception {
-        fc1=new ForkChannel(a, "stack", "fc1", false,ProtocolStack.ABOVE, FORK.class, new COUNTER());
-        fc2=new ForkChannel(a, "stack", "fc2", false,ProtocolStack.ABOVE, FORK.class, new COUNTER());
         a.connect(CLUSTER);
+        fc1=new ForkChannel(a, "stack", "fc1", false,ProtocolStack.Position.ABOVE, FORK.class, new COUNTER());
+        fc2=new ForkChannel(a, "stack", "fc2", false,ProtocolStack.Position.ABOVE, FORK.class, new COUNTER());
+
         fc1.connect("foo");
         fc2.connect("bar");
 
@@ -302,7 +304,7 @@ public class ForkChannelTest {
         fc4=createForkChannel(b, "stack2", "fc2");
         rhm_fc4=new ReplicatedHashMap<>(fc4);
 
-        Util.waitUntilAllChannelsHaveSameSize(10000, 500, a, b);
+        Util.waitUntilAllChannelsHaveSameView(10000, 500, a, b);
         b.getState(null, 10000);
 
         for(int i=0; i < 10; i++) {
@@ -400,6 +402,11 @@ public class ForkChannelTest {
         public Object down(Event evt) {
             System.out.println(myname + ": down(): " + evt);
             return down_prot.down(evt);
+        }
+
+        public Object down(Message msg) {
+            System.out.println(myname + ": down(): " + msg);
+            return down_prot.down(msg);
         }
 
         public String toString() {

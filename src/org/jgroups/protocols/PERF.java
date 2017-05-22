@@ -10,6 +10,7 @@ import org.jgroups.util.MessageBatch;
 
 import java.io.DataInput;
 import java.io.DataOutput;
+import java.util.function.Supplier;
 
 /**
  * Protocol measuring latency between stacks. On {@link Protocol#down(org.jgroups.Event)}, a header is added to the
@@ -47,37 +48,35 @@ public class PERF extends Protocol {
 
     public Object down(Event evt) {
         switch(evt.getType()) {
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                msg.putHeader(id, new PerfHeader(System.nanoTime()));
-                break;
             case Event.SET_LOCAL_ADDRESS:
-                local_addr=(Address)evt.getArg();
+                local_addr=evt.getArg();
                 break;
         }
         return down_prot.down(evt);
     }
 
-    public Object up(Event evt) {
-        if(evt.getType() == Event.MSG) {
-            Message msg=(Message)evt.getArg();
-            PerfHeader hdr=(PerfHeader)msg.getHeader(id);
-            if(hdr == null)
-                log.error("%s: no perf header found", local_addr);
-            else {
-                long time=System.nanoTime() - hdr.start_time;
-                if(time <= 0)
-                    log.error("%d: time is <= 0", time);
-                else
-                    avg.add(time);
-            }
+    public Object down(Message msg) {
+        msg.putHeader(id, new PerfHeader(System.nanoTime()));
+        return down_prot.down(msg);
+    }
+
+    public Object up(Message msg) {
+        PerfHeader hdr=msg.getHeader(id);
+        if(hdr == null)
+            log.error("%s: no perf header found", local_addr);
+        else {
+            long time=System.nanoTime() - hdr.start_time;
+            if(time <= 0)
+                log.error("%d: time is <= 0", time);
+            else
+                avg.add(time);
         }
-        return up_prot.up(evt);
+        return up_prot.up(msg);
     }
 
     public void up(MessageBatch batch) {
         for(Message msg: batch) {
-            PerfHeader hdr=(PerfHeader)msg.getHeader(id);
+            PerfHeader hdr=msg.getHeader(id);
             if(hdr == null)
                 log.error("%s: no perf header found", local_addr);
             else {
@@ -101,8 +100,12 @@ public class PERF extends Protocol {
         public PerfHeader(long start_time) {
             this.start_time=start_time;
         }
+        public short getMagicId() {return 84;}
+        public Supplier<? extends Header> create() {
+            return PerfHeader::new;
+        }
 
-        public int size() {
+        public int serializedSize() {
             return Global.LONG_SIZE;
         }
 

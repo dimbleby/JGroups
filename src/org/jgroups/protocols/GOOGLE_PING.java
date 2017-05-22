@@ -7,7 +7,9 @@ package org.jgroups.protocols;
  * [1] https://developers.google.com/storage/docs/migrating#migration-simple
  * @author Bela Ban
  * @since 3.5
+ * @deprecated Use GOOGLE_PING2 instead: https://github.com/jgroups-extras/jgroups-google
  */
+@Deprecated
 public class GOOGLE_PING extends S3_PING {
 
     public void init() throws Exception {
@@ -18,8 +20,8 @@ public class GOOGLE_PING extends S3_PING {
 
     protected AWSAuthConnection createConnection() {
        // Fix for JGRP-1992. Always use secure port, if port is not specified
-        return port > 0? new AWSAuthConnection(access_key, secret_access_key, use_ssl, host, port)
-          : new AWSAuthConnection(access_key, secret_access_key, use_ssl, host, Utils.SECURE_PORT);
+        int tmp_port=port > 0? port : Utils.SECURE_PORT;
+        return new AWSAuthConnection(access_key, secret_access_key, use_ssl, host, tmp_port);
     }
 }
 

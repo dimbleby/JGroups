@@ -1,12 +1,10 @@
 package org.jgroups.protocols.relay;
 
 import org.jgroups.Address;
-import org.jgroups.util.AsciiString;
-import org.jgroups.util.ExtendedUUID;
-import org.jgroups.util.UUID;
-import org.jgroups.util.Util;
+import org.jgroups.util.*;
 
 import java.util.Arrays;
+import java.util.function.Supplier;
 
 /**
  * Implementation of SiteAddress
@@ -16,7 +14,6 @@ import java.util.Arrays;
 public class SiteUUID extends ExtendedUUID implements SiteAddress {
     protected static final byte[] NAME      = Util.stringToBytes("relay2.name"); // logical name, can be null
     protected static final byte[] SITE_NAME = Util.stringToBytes("relay2.site");
-    private static final long     serialVersionUID=7128439052905502361L;
 
 
     public SiteUUID() {
@@ -41,6 +38,10 @@ public class SiteUUID extends ExtendedUUID implements SiteAddress {
         if(name != null)
             put(NAME, Util.stringToBytes(name));
         put(SITE_NAME, Util.stringToBytes(site));
+    }
+
+    public Supplier<? extends UUID> create() {
+        return SiteUUID::new;
     }
 
     public String getName() {
@@ -72,14 +73,14 @@ public class SiteUUID extends ExtendedUUID implements SiteAddress {
 
     public String print(boolean detailed) {
         String name=getName();
-        String retval=name != null? name : get(this);
+        String retval=name != null? name : NameCache.get(this);
         return retval + ":" + getSite() + (detailed? printOthers() : "");
     }
 
     protected String printOthers() {
         StringBuilder sb=new StringBuilder();
         if(flags != 0)
-            sb.append(" flags=" + flags + " (" + flagsToString() + ")");
+            sb.append(" flags=" + flags + " (" + flags + ")");
         if(keys == null)
             return sb.toString();
         for(int i=0; i < keys.length; i++) {

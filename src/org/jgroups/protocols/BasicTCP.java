@@ -56,13 +56,13 @@ public abstract class BasicTCP extends TP implements Receiver {
               description="The address of a local network interface which should be used by client sockets to bind to. " +
                 "The following special values are also recognized: GLOBAL, SITE_LOCAL, LINK_LOCAL and NON_LOOPBACK",
               systemProperty={Global.TCP_CLIENT_BIND_ADDR},writable=false)
-    protected InetAddress client_bind_addr=null;
+    protected InetAddress client_bind_addr;
 
     @Property(description="The local port a client socket should bind to. If 0, an ephemeral port will be picked.")
-    protected int         client_bind_port=0;
+    protected int         client_bind_port;
 
     @Property(description="If true, client sockets will not explicitly bind to bind_addr but will defer to the native socket")
-    protected boolean     defer_client_bind_addr=false;
+    protected boolean     defer_client_bind_addr;
 
 
     /* --------------------------------------------- Fields ------------------------------------------------------ */
@@ -77,8 +77,6 @@ public abstract class BasicTCP extends TP implements Receiver {
     public void     setReaperInterval(long interval) {this.reaper_interval=interval;}
     public long     getConnExpireTime()              {return conn_expire_time;}
     public void     setConnExpireTime(long time)     {this.conn_expire_time=time;}
-    // public boolean  getReuseAddress()                {return this.reuse_addr;}
-    // public BasicTCP setReuseAddress(boolean b)       {this.reuse_addr=b; return this;}
 
 
     public void init() throws Exception {
@@ -107,7 +105,6 @@ public abstract class BasicTCP extends TP implements Receiver {
     }
 
     public void sendUnicast(PhysicalAddress dest, byte[] data, int offset, int length) throws Exception {
-        if(log.isTraceEnabled()) log.trace("dest=" + dest + " (" + length + " bytes)");
         send(dest, data, offset, length);
     }
 
@@ -123,11 +120,6 @@ public abstract class BasicTCP extends TP implements Receiver {
     public abstract void send(Address dest, byte[] data, int offset, int length) throws Exception;
 
     public abstract void retainAll(Collection<Address> members);
-
-    /** BaseServer.Receiver interface */
-    public void receive(Address sender, byte[] data, int offset, int length) {
-        super.receive(sender, data, offset, length);
-    }
 
     public void receive(Address sender, ByteBuffer buf) {
         Util.bufferToArray(sender, buf, this);

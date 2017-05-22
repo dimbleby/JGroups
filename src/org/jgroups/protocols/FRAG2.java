@@ -4,15 +4,22 @@ import org.jgroups.Address;
 import org.jgroups.Event;
 import org.jgroups.Message;
 import org.jgroups.View;
-import org.jgroups.annotations.*;
+import org.jgroups.annotations.MBean;
+import org.jgroups.annotations.ManagedAttribute;
+import org.jgroups.annotations.ManagedOperation;
+import org.jgroups.annotations.Property;
 import org.jgroups.stack.Protocol;
+import org.jgroups.util.AverageMinMax;
 import org.jgroups.util.MessageBatch;
 import org.jgroups.util.Range;
 import org.jgroups.util.Util;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -63,17 +70,25 @@ public class FRAG2 extends Protocol {
     protected Address             local_addr;
 
     @ManagedAttribute(description="Number of sent fragments")
-    AtomicLong                    num_frags_sent=new AtomicLong(0);
+    protected LongAdder           num_frags_sent=new LongAdder();
     @ManagedAttribute(description="Number of received fragments")
-    AtomicLong                    num_frags_received=new AtomicLong(0);
+    protected LongAdder           num_frags_received=new LongAdder();
+
+    protected final AverageMinMax avg_size_down=new AverageMinMax();
+    protected final AverageMinMax avg_size_up=new AverageMinMax();
 
     public int   getFragSize()                  {return frag_size;}
     public void  setFragSize(int s)             {frag_size=s;}
-    public long  getNumberOfSentFragments()     {return num_frags_sent.get();}
-    public long  getNumberOfReceivedFragments() {return num_frags_received.get();}
+    public long  getNumberOfSentFragments()     {return num_frags_sent.sum();}
+    public long  getNumberOfReceivedFragments() {return num_frags_received.sum();}
     public int   fragSize()                     {return frag_size;}
     public FRAG2 fragSize(int size)             {frag_size=size; return this;}
 
+    @ManagedAttribute(description="min/avg/max size (in bytes) for messages sent down that needed to be fragmented")
+    public String getAvgSizeDown() {return avg_size_down.toString();}
+
+    @ManagedAttribute(description="min/avg/max size (in bytes) of messages re-assembled from fragments")
+    public String getAvgSizeUp()   {return avg_size_up.toString();}
 
     synchronized int getNextId() {
         return curr_id++;
@@ -102,8 +117,10 @@ public class FRAG2 extends Protocol {
 
     public void resetStats() {
         super.resetStats();
-        num_frags_sent.set(0);
-        num_frags_received.set(0);
+        num_frags_sent.reset();
+        num_frags_received.reset();
+        avg_size_down.clear();
+        avg_size_up.clear();
     }
 
 
@@ -114,66 +131,63 @@ public class FRAG2 extends Protocol {
      */
     public Object down(Event evt) {
         switch(evt.getType()) {
-
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                long size=msg.getLength();
-                if(size > frag_size) {
-                    fragment(msg);  // Fragment and pass down
-                    return null;
-                }
-                break;
-
             case Event.VIEW_CHANGE:
-                handleViewChange((View)evt.getArg());
+                handleViewChange(evt.getArg());
                 break;
-
             case Event.SET_LOCAL_ADDRESS:
-                local_addr=(Address)evt.getArg();
+                local_addr=evt.getArg();
                 break;
         }
-
         return down_prot.down(evt);  // Pass on to the layer below us
     }
 
+    public Object down(Message msg) {
+        long size=msg.getLength();
+        if(size > frag_size) {
+            fragment(msg);  // Fragment and pass down
+            avg_size_down.add(size);
+            return null;
+        }
+        return down_prot.down(msg);
+    }
 
     /**
      * If event is a message, if it is fragmented, re-assemble fragments into big message and pass up the stack.
      */
     public Object up(Event evt) {
         switch(evt.getType()) {
-
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                FragHeader hdr=(FragHeader)msg.getHeader(this.id);
-                if(hdr != null) { // needs to be defragmented
-                    Message assembled_msg=unfragment(msg, hdr);
-                    if(assembled_msg != null) {
-                        if(log.isTraceEnabled()) log.trace("%s: assembled_msg is %s", local_addr, assembled_msg);
-                        assembled_msg.setSrc(msg.getSrc()); // needed ? YES, because fragments have a null src !!
-                        up_prot.up(new Event(Event.MSG, assembled_msg));
-                    }
-                    return null;
-                }
-                break;
-
             case Event.VIEW_CHANGE:
-                handleViewChange((View)evt.getArg());
+                handleViewChange(evt.getArg());
                 break;
         }
-
         return up_prot.up(evt); // Pass up to the layer above us by default
+    }
+
+    public Object up(Message msg) {
+        FragHeader hdr=msg.getHeader(this.id);
+        if(hdr != null) { // needs to be defragmented
+            Message assembled_msg=unfragment(msg, hdr);
+            if(assembled_msg != null) {
+                assembled_msg.setSrc(msg.getSrc()); // needed ? YES, because fragments have a null src !!
+                up_prot.up(assembled_msg);
+                avg_size_up.add(assembled_msg.length());
+            }
+            return null;
+        }
+        return up_prot.up(msg);
     }
 
     public void up(MessageBatch batch) {
         for(Message msg: batch) {
-            FragHeader hdr=(FragHeader)msg.getHeader(this.id);
+            FragHeader hdr=msg.getHeader(this.id);
             if(hdr != null) { // needs to be defragmented
                 Message assembled_msg=unfragment(msg,hdr);
-                if(assembled_msg != null)
+                if(assembled_msg != null) {
                     // the reassembled msg has to be add in the right place (https://issues.jboss.org/browse/JGRP-1648),
                     // and canot be added to the tail of the batch !
                     batch.replace(msg, assembled_msg);
+                    avg_size_up.add(assembled_msg.length());
+                }
                 else
                     batch.remove(msg);
             }
@@ -224,7 +238,7 @@ public class FRAG2 extends Protocol {
             byte[] buffer=msg.getRawBuffer();
             final List<Range> fragments=Util.computeFragOffsets(msg.getOffset(), msg.getLength(), frag_size);
             int num_frags=fragments.size();
-            num_frags_sent.addAndGet(num_frags);
+            num_frags_sent.add(num_frags);
 
             if(log.isTraceEnabled()) {
                 Address dest=msg.getDest();
@@ -240,7 +254,7 @@ public class FRAG2 extends Protocol {
                 frag_msg.setBuffer(buffer, (int)r.low, (int)r.high);
                 FragHeader hdr=new FragHeader(frag_id, i, num_frags);
                 frag_msg.putHeader(this.id, hdr);
-                down_prot.down(new Event(Event.MSG, frag_msg));
+                down_prot.down(frag_msg);
             }
         }
         catch(Exception e) {
@@ -267,7 +281,7 @@ public class FRAG2 extends Protocol {
             if(tmp != null) // value was already present
                 frag_table=tmp;
         }
-        num_frags_received.incrementAndGet();
+        num_frags_received.increment();
 
         FragEntry entry=frag_table.get(hdr.id);
         if(entry == null) {
@@ -358,7 +372,7 @@ public class FRAG2 extends Protocol {
                 if(msg == null)
                     return false;
             }
-            /*all fragmentations have been received*/
+            /* have all fragments been received */
             return true;
         }
 

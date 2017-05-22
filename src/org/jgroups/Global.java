@@ -30,8 +30,6 @@ public final class Global {
     public static final String EXTERNAL_PORT="jgroups.external_port";
     public static final String TCP_CLIENT_BIND_ADDR="jgroups.tcp.client_bind_addr";
 
-    public static final String BIND_INTERFACE="jgroups.bind_interface";
-
     public static final String TCPPING_INITIAL_HOSTS="jgroups.tcpping.initial_hosts";
 
     public static final String UDP_MCAST_ADDR="jgroups.udp.mcast_addr";
@@ -42,24 +40,17 @@ public final class Global {
     public static final String MPING_MCAST_PORT="jgroups.mping.mcast_port";
     public static final String MPING_IP_TTL="jgroups.mping.ip_ttl";
 
-    public static final String BPING_BIND_PORT="jgroups.bping.bind_port";
-
-    public static final String STOMP_BIND_ADDR="jgroups.stomp.bind_addr";
-    public static final String STOMP_ENDPOINT_ADDR="jgroups.stomp.endpoint_addr";
-
     public static final String MAGIC_NUMBER_FILE="jgroups.conf.magic_number_file";
     public static final String PROTOCOL_ID_FILE="jgroups.conf.protocol_id_file";
-    public static final String RESOLVE_DNS="jgroups.resolve_dns";
-    public static final String PRINT_UUIDS="jgroups.print_uuids";
-    public static final String UUID_CACHE_MAX_ELEMENTS="jgroups.uuid_cache.max_elements";
-    public static final String UUID_CACHE_MAX_AGE="jgroups.uuid_cache.max_age";
+
+    public static final String NAME_CACHE_MAX_ELEMENTS="jgroups.name_cache.max_elements";
+    public static final String NAME_CACHE_MAX_AGE="jgroups.name_cache.max_age";
 
     public static final String IPV6_MCAST_PREFIX="jgroups.ipmcast.prefix";
 
-    public static final String TIMER_NUM_THREADS="jgroups.timer.num_threads";
-
     public static final String USE_JDK_LOGGER="jgroups.use.jdk_logger"; // forces use of the JDK logger
-    public static final String CUSTOM_LOG_FACTORY="jgroups.logging.log_factory_class";
+    public static final String LOG_CLASS="jgroups.log_class"; // class of preferred logger
+
     /** System prop for defining the default number of headers in a Message */
     public static final String DEFAULT_HEADERS="jgroups.msg.default_headers";
 
@@ -70,7 +61,6 @@ public final class Global {
     
     public static final long   THREADPOOL_SHUTDOWN_WAIT_TIME=3000;
     public static final long   THREAD_SHUTDOWN_WAIT_TIME=300;
-    public static final String DUMMY="dummy-";
 
     public static final String MATCH_ADDR="match-address";
     public static final String MATCH_HOST="match-host";

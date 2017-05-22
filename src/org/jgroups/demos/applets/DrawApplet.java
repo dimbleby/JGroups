@@ -122,11 +122,11 @@ public class DrawApplet extends Applet implements MouseMotionListener, ActionLis
 
     public void paint(Graphics g) {
         Rectangle bounds=panel.getBounds();
-        Color old=graphics.getColor();
 
         if(bounds == null || graphics == null)
             return;
 
+        Color old=graphics.getColor();
         graphics.setColor(Color.black);
         graphics.drawRect(0, 0, bounds.width - 1, bounds.height - 1);
         graphics.setColor(old);
@@ -193,7 +193,7 @@ public class DrawApplet extends Applet implements MouseMotionListener, ActionLis
             outstream.writeInt(blue);
             outstream.writeInt(x);
             outstream.writeInt(y);
-            channel.send(new Message(null, null, out.toByteArray()));
+            channel.send(new Message(null, out.toByteArray()));
             out.reset();
         }
         catch(Exception ex) {
@@ -220,7 +220,7 @@ public class DrawApplet extends Applet implements MouseMotionListener, ActionLis
             out.reset();
             outstream=new DataOutputStream(out);
             outstream.writeInt(-13);
-            channel.send(new Message(null, null, out.toByteArray()));
+            channel.send(new Message(null, out.toByteArray()));
             outstream.flush();
         }
         catch(Exception ex) {

@@ -1,7 +1,5 @@
 package org.jgroups.protocols;
 
-import org.jgroups.Event;
-import org.jgroups.Global;
 import org.jgroups.Message;
 import org.jgroups.annotations.Property;
 import org.jgroups.util.ByteArrayDataInputStream;
@@ -28,7 +26,7 @@ public class BPING extends PING implements Runnable {
     @Property(description="Target address for broadcasts. This should be restricted to the local subnet, e.g. 192.168.1.255")
     protected String dest="255.255.255.255";
 
-    @Property(description="Port for discovery packets", systemProperty=Global.BPING_BIND_PORT)
+    @Property(description="Port for discovery packets")
     protected int bind_port=8555;
 
     @Property(description="Sends discovery packets to ports 8555 to (8555+port_range)")
@@ -103,7 +101,7 @@ public class BPING extends PING implements Runnable {
         try {
             if(msg.getSrc() == null)
                 msg.setSrc(local_addr);
-            ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(128);
+            ByteArrayDataOutputStream out=new ByteArrayDataOutputStream((int)msg.size());
             msg.writeTo(out);
             for(int i=bind_port; i <= bind_port+port_range; i++) {
                 DatagramPacket packet=new DatagramPacket(out.buffer(), 0, out.position(), dest_addr, i);
@@ -129,7 +127,7 @@ public class BPING extends PING implements Runnable {
                 inp=new ByteArrayDataInputStream(packet.getData(), packet.getOffset(), packet.getLength());
                 Message msg=new Message();
                 msg.readFrom(inp);
-                up(new Event(Event.MSG, msg));
+                up(msg);
             }
             catch(SocketException socketEx) {
                 break;

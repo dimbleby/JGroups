@@ -11,13 +11,14 @@ import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.stream.LongStream;
 
 /**
  * Tests {@link RequestTable}
  * @author Bela Ban
  * @since  3.6.7
  */
-@Test(groups=Global.FUNCTIONAL,singleThreaded=false)
+@Test(groups=Global.FUNCTIONAL)
 public class RequestTableTest {
 
     public void testSimpleCreation() {
@@ -89,6 +90,35 @@ public class RequestTableTest {
     }
 
 
+    public void testAddRemove() {
+        RequestTable<Integer> table=create(8, 0, 8);
+        System.out.println("table = " + table);
+        remove(table, 1, 8);
+        System.out.println("table = " + table);
+        table.add(8); // will trigger a growth
+        System.out.println("table = " + table);
+        assert table.size() == 2; // 0 and 8
+        assert table.capacity() == 16;
+
+        add(table, 9, 100);
+        System.out.println("table = " + table);
+        assert table.size() == 93;
+        assert table.capacity() == Util.getNextHigherPowerOfTwo(100);
+
+        table.remove(0);
+        boolean rc=table.compact();
+        assert !rc;
+        remove(table, 8, 50);
+        System.out.println("rc = " + rc);
+        assert table.size() == 50;
+
+        rc=table.compact();
+        System.out.println("table = " + table);
+        assert rc;
+        assert table.size() == 50;
+        assert table.capacity() == 64;
+    }
+
 
     public void testAddMany() {
         RequestTable<Integer> table=create(4, 0, 0);
@@ -159,6 +189,14 @@ public class RequestTableTest {
         assert table.low() == 4 && table.high() == 4;
     }
 
+    public void testRemoveMany() {
+        RequestTable<Integer> table=create(40, 0, 41); // exclusive 41
+        remove(table, 0, 4);
+        table.removeMany(LongStream.rangeClosed(4, 40), seqno -> System.out.printf("seqno=%d\n", seqno));
+        assert table.size() == 0;
+        assert table.low() == 41 && table.high() == 41;
+    }
+
     public void testClear() {
         RequestTable<Integer> table=create(4, 0, 0);
         add(table, 0, 100);
@@ -178,7 +216,7 @@ public class RequestTableTest {
         Collections.shuffle(tmp);
         ConcurrentLinkedQueue<Integer> list=new ConcurrentLinkedQueue<>(tmp);
         Remover[] removers=new Remover[10];
-        final CountDownLatch latch=new CountDownLatch(removers.length+1);
+        final CountDownLatch latch=new CountDownLatch(1);
         for(int i=0; i < removers.length; i++) {
             removers[i]=new Remover(table, latch, list);
             removers[i].start();
@@ -451,7 +489,12 @@ public class RequestTableTest {
         }
 
         public void run() {
-            latch.countDown();
+            try {
+                latch.await();
+            }
+            catch(InterruptedException e) {
+                e.printStackTrace();
+            }
             Integer seqno=null;
             while((seqno=list.poll()) != null) {
                 Integer el=table.remove(seqno);

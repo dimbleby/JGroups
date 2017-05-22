@@ -12,6 +12,7 @@ import org.jgroups.util.Util;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.util.concurrent.Executor;
+import java.util.function.Supplier;
 
 /**
  * Implementation of daisy chaining. Multicast messages are sent to our neighbor, which sends them to its neighbor etc.
@@ -37,7 +38,6 @@ public class DAISYCHAIN extends Protocol {
     protected volatile Address       local_addr, next;
     protected int                    view_size=0;
     protected Executor               default_pool=null;
-    protected Executor               oob_pool=null;
     protected volatile boolean       running=true;
 
     @ManagedAttribute
@@ -54,8 +54,7 @@ public class DAISYCHAIN extends Protocol {
     }
 
     public void init() throws Exception {
-        default_pool=getTransport().getDefaultThreadPool();
-        oob_pool=getTransport().getOOBThreadPool();
+        default_pool=getTransport().getThreadPool();
     }
 
     public void start() throws Exception {
@@ -70,37 +69,8 @@ public class DAISYCHAIN extends Protocol {
 
     public Object down(final Event evt) {
         switch(evt.getType()) {
-            case Event.MSG:
-                final Message msg=(Message)evt.getArg();
-                if(msg.getDest() != null)
-                    break; // only process multicast messages
-
-                if(next == null) // view hasn't been received yet, use the normal transport
-                    break;
-
-                // we need to copy the message, as we cannot do a msg.setSrc(next): the next retransmission
-                // would use 'next' as destination  !
-                Message copy=msg.copy(true);
-                short hdr_ttl=(short)(loopback? view_size -1 : view_size);
-                DaisyHeader hdr=new DaisyHeader(hdr_ttl);
-                copy.setDest(next);
-                copy.putHeader(getId(), hdr);
-
-                msgs_sent++;
-                
-                if(loopback) {
-                    if(log.isTraceEnabled()) log.trace(new StringBuilder("looping back message ").append(msg));
-                    if(msg.getSrc() == null)
-                        msg.setSrc(local_addr);
-
-                    Executor pool=msg.isFlagSet(Message.Flag.OOB)? oob_pool : default_pool;
-                    pool.execute(() -> up_prot.up(evt));
-                }
-                return down_prot.down(new Event(Event.MSG, copy));
-
-
             case Event.VIEW_CHANGE:
-                handleView((View)evt.getArg());
+                handleView(evt.getArg());
                 break;
 
             case Event.TMP_VIEW:
@@ -108,45 +78,67 @@ public class DAISYCHAIN extends Protocol {
                 break;
             
             case Event.SET_LOCAL_ADDRESS:
-                local_addr=(Address)evt.getArg();
+                local_addr=evt.getArg();
                 break;
         }
         return down_prot.down(evt);
     }
 
+    public Object down(Message msg) {
+        if(msg.getDest() != null)
+            return down_prot.down(msg); // only process multicast messages
 
-    public Object up(Event evt) {
-        switch(evt.getType()) {
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                DaisyHeader hdr=(DaisyHeader)msg.getHeader(getId());
-                if(hdr == null)
-                    break;
+        if(next == null) // view hasn'<></> been received yet, use the normal transport
+            return down_prot.down(msg);
 
-                // 1. forward the message to the next in line if ttl > 0
-                short ttl=hdr.getTTL();
-                if(log.isTraceEnabled())
-                    log.trace(local_addr + ": received message from " + msg.getSrc() + " with ttl=" + ttl);
-                if(--ttl > 0) {
-                    Message copy=msg.copy(true);
-                    copy.setDest(next);
-                    copy.putHeader(getId(), new DaisyHeader(ttl));
-                    msgs_forwarded++;
-                    if(log.isTraceEnabled())
-                        log.trace(local_addr + ": forwarding message to " + next + " with ttl=" + ttl);
-                    down_prot.down(new Event(Event.MSG, copy));
-                }
+        // we need to copy the message, as we cannot do a msg.setSrc(next): the next retransmission
+        // would use 'next' as destination  !
+        Message copy=msg.copy(true);
+        short hdr_ttl=(short)(loopback? view_size -1 : view_size);
+        DaisyHeader hdr=new DaisyHeader(hdr_ttl);
+        copy.setDest(next);
+        copy.putHeader(getId(), hdr);
 
-                // 2. Pass up
-                msg.setDest(null);
-                break;
+        msgs_sent++;
+
+        if(loopback) {
+            if(log.isTraceEnabled()) log.trace(new StringBuilder("looping back message ").append(msg));
+            if(msg.getSrc() == null)
+                msg.setSrc(local_addr);
+
+            default_pool.execute(() -> up_prot.up(msg));
         }
-        return up_prot.up(evt);
+        return down_prot.down(copy);
+
+    }
+
+    public Object up(Message msg) {
+        DaisyHeader hdr=msg.getHeader(getId());
+        if(hdr == null)
+            return up_prot.up(msg);
+
+        // 1. forward the message to the next in line if ttl > 0
+        short ttl=hdr.getTTL();
+        if(log.isTraceEnabled())
+            log.trace(local_addr + ": received message from " + msg.getSrc() + " with ttl=" + ttl);
+        if(--ttl > 0) {
+            Message copy=msg.copy(true);
+            copy.setDest(next);
+            copy.putHeader(getId(), new DaisyHeader(ttl));
+            msgs_forwarded++;
+            if(log.isTraceEnabled())
+                log.trace(local_addr + ": forwarding message to " + next + " with ttl=" + ttl);
+            down_prot.down(copy);
+        }
+
+        // 2. Pass up
+        msg.setDest(null);
+        return up_prot.up(msg);
     }
 
     public void up(MessageBatch batch) {
         for(Message msg: batch) {
-            DaisyHeader hdr=(DaisyHeader)msg.getHeader(getId());
+            DaisyHeader hdr=msg.getHeader(getId());
             if(hdr != null) {
                 // 1. forward the message to the next in line if ttl > 0
                 short ttl=hdr.getTTL();
@@ -159,7 +151,7 @@ public class DAISYCHAIN extends Protocol {
                     msgs_forwarded++;
                     if(log.isTraceEnabled())
                         log.trace(local_addr + ": forwarding message to " + next + " with ttl=" + ttl);
-                    down_prot.down(new Event(Event.MSG, copy));
+                    down_prot.down(copy);
                 }
 
                 // 2. Pass up
@@ -192,13 +184,17 @@ public class DAISYCHAIN extends Protocol {
             this.ttl=ttl;
         }
 
+        public short getMagicId() {return 69;}
+
         public short getTTL() {return ttl;}
 
         public void setTTL(short ttl) {
             this.ttl=ttl;
         }
 
-        public int size() {
+        public Supplier<? extends Header> create() {return DaisyHeader::new;}
+
+        public int serializedSize() {
             return Global.SHORT_SIZE;
         }
 

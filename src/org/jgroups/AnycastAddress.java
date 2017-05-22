@@ -5,6 +5,7 @@ import org.jgroups.util.Util;
 import java.io.*;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.function.Supplier;
 
 /**
  * This type of address represents a subset of the cluster members in which the total order properties must be applied,
@@ -13,9 +14,8 @@ import java.util.Collection;
  * @author Pedro Ruivo
  * @since 3.1
  */
-public class AnycastAddress implements Address {
+public class AnycastAddress implements Address, Constructable<AnycastAddress> {
     protected Collection<Address> destinations;
-    private static final long serialVersionUID = -3133792315497822421L;
 
     public AnycastAddress() {
     }
@@ -26,6 +26,10 @@ public class AnycastAddress implements Address {
 
     public AnycastAddress(Address... addresses) {
         add(addresses);
+    }
+
+    public Supplier<? extends AnycastAddress> create() {
+        return AnycastAddress::new;
     }
 
     public void add(Address... addresses) {
@@ -61,7 +65,7 @@ public class AnycastAddress implements Address {
         }
     }
 
-    public int size() {
+    public int serializedSize() {
         if (destinations == null) {
             return Global.INT_SIZE;
         }
@@ -83,9 +87,7 @@ public class AnycastAddress implements Address {
         if (o == null || getClass() != o.getClass()) return false;
 
         AnycastAddress that = (AnycastAddress) o;
-
         return !(destinations != null ? !destinations.equals(that.destinations) : that.destinations != null);
-
     }
 
     @Override
@@ -125,21 +127,4 @@ public class AnycastAddress implements Address {
         destinations = (Collection<Address>) Util.readAddresses(in, ArrayList.class);
     }
 
-    @Override
-    public void writeExternal(ObjectOutput objectOutput) throws IOException {
-        try {
-            writeTo(objectOutput);
-        } catch (Exception e) {
-            throw new IOException(e);
-        }
-    }
-
-    @Override
-    public void readExternal(ObjectInput objectInput) throws IOException, ClassNotFoundException {
-        try {
-            readFrom(objectInput);
-        } catch (Exception e) {
-            throw new IOException(e);
-        }
-    }
 }

@@ -94,7 +94,7 @@ public class GMS_MergeTest {
         _testMergeAsymmetricPartitions(true, "testMergeAsymmetricPartitionsWithFlush");
     }
 
-    public static void testMergeAsymmetricPartitions2() throws Exception {
+    public void testMergeAsymmetricPartitions2() throws Exception {
         _testMergeAsymmetricPartitions2(false, "testMergeAsymmetricPartitions2");
     }
 
@@ -118,7 +118,7 @@ public class GMS_MergeTest {
             MergeId merge_id=gms._getMergeId();
             assert merge_id == null;
             System.out.println("starting merge");
-            gms.up(new Event(Event.MSG, merge_request));
+            gms.up(merge_request);
 
             long timeout=gms.getMergeTimeout() * 10;
             System.out.println("sleeping for " + timeout + " ms, then fetching merge_id: should be null (cancelled by the MergeCanceller)");
@@ -326,7 +326,7 @@ public class GMS_MergeTest {
              discard.addIgnoreMember(c.getAddress());
 
              // A should drop all traffic from B or C
-             a.getProtocolStack().insertProtocol(discard, ProtocolStack.ABOVE, SHARED_LOOPBACK.class);
+             a.getProtocolStack().insertProtocol(discard, ProtocolStack.Position.ABOVE, SHARED_LOOPBACK.class);
 
              System.out.println("B and C exchange " + NUM + " messages, A discards them");
              for(int i=0; i < NUM; i++)
@@ -385,14 +385,13 @@ public class GMS_MergeTest {
      }
 
 
-/**
+    /**
      * Tests the merge of the following partitions:
      * <ul>
      * <li>A: {A,B}
      * <li>B: {B}
      * </ol>
      * JIRA: https://jira.jboss.org/jira/browse/JGRP-1031
-     * @throws Exception
      */
     static void _testMergeAsymmetricPartitions2(boolean use_flush_props, String cluster_name) throws Exception {
         JChannel[] channels=null;
@@ -747,7 +746,7 @@ public class GMS_MergeTest {
             if(name == null || name.isEmpty()) // generate a logical name if not set
                 name=Util.generateLocalName();
             if(name != null && !name.isEmpty())
-                org.jgroups.util.UUID.add(local_addr, name);
+                org.jgroups.util.NameCache.add(local_addr, name);
 
             Event evt=new Event(Event.SET_LOCAL_ADDRESS, local_addr);
             down(evt);

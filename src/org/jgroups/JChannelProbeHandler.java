@@ -1,6 +1,7 @@
 package org.jgroups;
 
 import org.jgroups.blocks.MethodCall;
+import org.jgroups.jmx.AdditionalJmxObjects;
 import org.jgroups.jmx.ResourceDMBean;
 import org.jgroups.logging.Log;
 import org.jgroups.logging.LogFactory;
@@ -8,20 +9,21 @@ import org.jgroups.stack.DiagnosticsHandler;
 import org.jgroups.stack.Protocol;
 import org.jgroups.util.Util;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
+import java.lang.management.ThreadMXBean;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.stream.Stream;
 
 /**
  * @author Bela Ban
  * @since  4.0
  */
 public class JChannelProbeHandler implements DiagnosticsHandler.ProbeHandler {
-    protected final JChannel ch;
-    protected final Log log;
+    protected final JChannel      ch;
+    protected final Log           log;
 
     public JChannelProbeHandler(JChannel ch) {
         this.ch=ch;
@@ -29,8 +31,8 @@ public class JChannelProbeHandler implements DiagnosticsHandler.ProbeHandler {
     }
 
     public Map<String, String> handleProbe(String... keys) {
-        Map<String, String> map=new HashMap<>(3);
-        for(String key: keys) {
+        Map<String,String> map=new TreeMap<>();
+        for(String key : keys) {
             if(key.startsWith("jmx")) {
                 handleJmx(map, key);
                 continue;
@@ -43,19 +45,128 @@ public class JChannelProbeHandler implements DiagnosticsHandler.ProbeHandler {
                 int index=key.indexOf('=');
                 if(index != -1) {
                     try {
-                        handleOperation(map, key.substring(index+1));
+                        handleOperation(map, key.substring(index + 1));
                     }
                     catch(Throwable throwable) {
-                        log.error(Util.getMessage("OperationInvocationFailure"), key.substring(index+1), throwable);
+                        log.error(Util.getMessage("OperationInvocationFailure"), key.substring(index + 1), throwable);
                     }
                 }
+                continue;
+            }
+            if(key.startsWith("threads")) {
+                ThreadMXBean bean=ManagementFactory.getThreadMXBean();
+                boolean cpu_supported=bean.isThreadCpuTimeSupported();
+                boolean contention_supported=bean.isThreadContentionMonitoringSupported();
+                int max_name=0;
+                long[] ids=bean.getAllThreadIds();
+                List<ThreadEntry> entries=new ArrayList<>(ids.length);
+
+                for(long id : ids) {
+                    ThreadInfo info=bean.getThreadInfo(id);
+                    if(info == null) continue;
+                    String thread_name=info.getThreadName();
+                    max_name=Math.max(max_name, thread_name.length());
+                    Thread.State state=info.getThreadState();
+                    long blocked=info.getBlockedCount();
+                    long blocked_time=contention_supported? info.getBlockedTime() : -1;
+                    long waited=info.getWaitedCount();
+                    long waited_time=contention_supported? info.getWaitedTime() : -1;
+                    double cpu_time=cpu_supported? bean.getThreadCpuTime(id) : -1;
+                    if(cpu_time > 0)
+                        cpu_time/=1_000_000;
+                    double user_time=cpu_supported? bean.getThreadUserTime(id) : -1;
+                    if(user_time > 0)
+                        user_time/=1_000_000;
+
+                    ThreadEntry entry=new ThreadEntry(state, thread_name, blocked, waited, blocked_time, waited_time,
+                                                      cpu_time, user_time);
+                    entries.add(entry);
+                }
+
+                int index=key.indexOf('=');
+                if(index >= 0) {
+                    Comparator<ThreadEntry> comp=Comparator.comparing(e -> e.thread_name);
+                    String val=key.substring(index+1);
+                    if(val.startsWith("state"))
+                        comp=Comparator.comparing(e -> e.state);
+                    else if(val.startsWith("cpu"))
+                        comp=Comparator.comparing((ThreadEntry e) -> e.cpu_time).reversed();
+                    else if(val.startsWith("user"))
+                        comp=Comparator.comparing((ThreadEntry e) -> e.user_time).reversed();
+                    else if(val.startsWith("block"))
+                        comp=Comparator.comparing((ThreadEntry e) -> e.blocks).reversed();
+                    else if(val.startsWith("btime"))
+                        comp=Comparator.comparing((ThreadEntry e) -> e.block_time).reversed();
+                    else if(val.startsWith("wait"))
+                        comp=Comparator.comparing((ThreadEntry e) -> e.waits).reversed();
+                    else if(val.startsWith("wtime"))
+                        comp=Comparator.comparing((ThreadEntry e) -> e.wait_time).reversed();
+                    entries.sort(comp);
+                }
+
+                // see if we need to limit the displayed data
+                index=key.indexOf('=', index+1);
+                int limit=0;
+                if(index >= 0) {
+                    String val=key.substring(index+1);
+                    limit=Integer.valueOf(val);
+                }
+
+
+                max_name=Math.min(max_name, 50)+1;
+                String title="\n[%s]   \t%-" + max_name+"s: %10s %10s %6s %9s %10s %10s\n";
+                String line="[%s]\t%-"+max_name+"s: %,8.0f %,8.0f %,10d %,9.0f %,10d %,10.0f\n";
+
+                StringBuilder sb=new StringBuilder(String.format(title,
+                                                                 "state", "thread-name", "cpu (ms)", "user (ms)",
+                                                                 "block", "btime (ms)", "wait", "wtime (ms)"));
+                Stream<ThreadEntry> stream=entries.stream();
+                if(limit > 0)
+                    stream=stream.limit(limit);
+                stream.forEach(e -> sb.append(e.print(line)));
+                map.put(key, sb.toString());
+                continue;
+            }
+            if(key.equals("enable-cpu")) {
+                map.put(key, enable(1, true));
+                continue;
+            }
+            if(key.startsWith("enable-cont")) {
+                map.put(key, enable(2, true));
+                continue;
+            }
+            if(key.equals("disable-cpu")) {
+                map.put(key, enable(1, false));
+                continue;
+            }
+            if(key.startsWith("disable-cont")) {
+                map.put(key, enable(2, false));
             }
         }
         return map;
     }
 
     public String[] supportedKeys() {
-        return new String[]{"reset-stats", "jmx", "op=<operation>[<args>]"};
+        return new String[]{"reset-stats", "jmx", "op=<operation>[<args>]",
+          "threads[=<filter>[=<limit>]]", "enable-cpu", "enable-contention", "disable-cpu", "disable-contention"};
+    }
+
+
+    protected static String enable(int type, boolean flag) {
+        ThreadMXBean bean=ManagementFactory.getThreadMXBean();
+        boolean supported=false;
+        if(type == 1) { // cpu
+            supported=bean.isThreadCpuTimeSupported();
+            if(supported)
+                bean.setThreadCpuTimeEnabled(flag);
+        }
+        else if(type == 2) {
+            supported=bean.isThreadContentionMonitoringSupported();
+            if(supported)
+                bean.setThreadContentionMonitoringEnabled(flag);
+        }
+        String tmp=type == 1? "CPU" : "contention";
+        return String.format("%s monitoring supported: %b, %s monitoring enabled: %b", tmp, supported, tmp, supported && flag);
     }
 
     protected JChannel resetAllStats() {
@@ -84,22 +195,50 @@ public class JChannelProbeHandler implements DiagnosticsHandler.ProbeHandler {
                     if(index != -1) {
                         String attrname=tmp.substring(0, index);
                         String attrvalue=tmp.substring(index+1);
-                        Protocol prot=ch.getProtocolStack().findProtocol(protocol_name);
-                        Field field=prot != null? Util.getField(prot.getClass(), attrname) : null;
+                        Object target=ch.getProtocolStack().findProtocol(protocol_name);
+                        Field field=target != null? Util.getField(target.getClass(), attrname) : null;
+                        if(field == null && target instanceof AdditionalJmxObjects) {
+                            Object[] objs=((AdditionalJmxObjects)target).getJmxObjects();
+                            if(objs != null && objs.length > 0) {
+                                for(Object o: objs) {
+                                    field=o != null? Util.getField(o.getClass(), attrname) : null;
+                                    if(field != null) {
+                                        target=o;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
                         if(field != null) {
-                            Object value=Util.convert(attrvalue,field.getType());
-                            if(value != null)
-                                prot.setValue(attrname, value);
+                            Object value=Util.convert(attrvalue, field.getType());
+                            if(value != null) {
+                                if(target instanceof Protocol)
+                                    ((Protocol)target).setValue(attrname, value);
+                                else
+                                    Util.setField(field, target, value);
+                            }
                         }
                         else {
                             // try to find a setter for X, e.g. x(type-of-x) or setX(type-of-x)
-                            ResourceDMBean.Accessor setter=ResourceDMBean.findSetter(prot, attrname);  // Util.getSetter(prot.getClass(), attrname);
+                            ResourceDMBean.Accessor setter=ResourceDMBean.findSetter(target, attrname);  // Util.getSetter(prot.getClass(), attrname);
+                            if(setter == null && target instanceof AdditionalJmxObjects) {
+                                Object[] objs=((AdditionalJmxObjects)target).getJmxObjects();
+                                if(objs != null && objs.length > 0) {
+                                    for(Object o: objs) {
+                                        setter=o != null? ResourceDMBean.findSetter(target, attrname) : null;
+                                        if(setter!= null)
+                                            break;
+                                    }
+                                }
+                            }
+
                             if(setter != null) {
                                 try {
                                     Class<?> type=setter instanceof ResourceDMBean.FieldAccessor?
                                       ((ResourceDMBean.FieldAccessor)setter).getField().getType() :
                                       setter instanceof ResourceDMBean.MethodAccessor?
-                                        ((ResourceDMBean.MethodAccessor)setter).getMethod().getParameterTypes()[0].getClass() : null;
+                                        ((ResourceDMBean.MethodAccessor)setter).getMethod().getParameterTypes()[0] : null;
                                     Object converted_value=Util.convert(attrvalue, type);
                                     setter.invoke(converted_value);
                                 }
@@ -170,11 +309,24 @@ public class JChannelProbeHandler implements DiagnosticsHandler.ProbeHandler {
                 args[i]=(String)strings[i];
         }
 
-        Method method=MethodCall.findMethod(prot.getClass(), method_name, args);
+        Object target=prot;
+        Method method=MethodCall.findMethod(target.getClass(), method_name, args);
         if(method == null) {
-            log.warn(Util.getMessage("MethodNotFound"), ch.getAddress(), prot.getClass().getSimpleName(), method_name);
-            return;
+            if(prot instanceof AdditionalJmxObjects) {
+                for(Object obj: ((AdditionalJmxObjects)prot).getJmxObjects()) {
+                    method=MethodCall.findMethod(obj.getClass(), method_name, args);
+                    if(method != null) {
+                        target=obj;
+                        break;
+                    }
+                }
+            }
+            if(method == null) {
+                log.warn(Util.getMessage("MethodNotFound"), ch.getAddress(), target.getClass().getSimpleName(), method_name);
+                return;
+            }
         }
+
         MethodCall call=new MethodCall(method);
         Object[] converted_args=null;
         if(args != null) {
@@ -183,9 +335,42 @@ public class JChannelProbeHandler implements DiagnosticsHandler.ProbeHandler {
             for(int i=0; i < args.length; i++)
                 converted_args[i]=Util.convert(args[i], types[i]);
         }
-        Object retval=call.invoke(prot, converted_args);
+        Object retval=call.invoke(target, converted_args);
         if(retval != null)
             map.put(prot_name + "." + method_name, retval.toString());
     }
+
+   protected static class ThreadEntry {
+       protected final Thread.State state;
+       protected final String       thread_name;
+       protected final long         blocks, waits;
+       protected final double       block_time, wait_time;  // ms
+       protected final double       cpu_time, user_time;    // ms
+
+       public ThreadEntry(Thread.State state, String thread_name, long blocks, long waits, double block_time, double wait_time,
+                          double cpu_time, double user_time) {
+           this.state=state;
+           this.thread_name=thread_name;
+           this.blocks=blocks;
+           this.waits=waits;
+           this.block_time=block_time;
+           this.wait_time=wait_time;
+           this.cpu_time=cpu_time;
+           this.user_time=user_time;
+       }
+
+       public String toString() {
+           StringBuilder sb=new StringBuilder(String.format("[%s] %s:", state, thread_name));
+           sb.append(String.format(" blocks=%d (%.2f ms) waits=%d (%.2f ms)", blocks, block_time, waits, wait_time));
+           sb.append(String.format(" sys=%.2f ms user=%.2f ms\n", cpu_time, user_time));
+           return sb.toString();
+       }
+
+       protected String print(String format) {
+           return String.format(format, state, thread_name, cpu_time, user_time, blocks, block_time, waits, wait_time);
+       }
+
+
+   }
 
 }

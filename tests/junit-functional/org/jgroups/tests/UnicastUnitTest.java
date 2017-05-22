@@ -178,7 +178,7 @@ public class UnicastUnitTest {
     protected void connect() throws Exception {
         a.connect("UnicastUnitTest");
         b.connect("UnicastUnitTest");
-        Util.waitUntilAllChannelsHaveSameSize(10000, 1000, a, b);
+        Util.waitUntilAllChannelsHaveSameView(10000, 1000, a, b);
     }
 
 
@@ -209,7 +209,7 @@ public class UnicastUnitTest {
             List<Address> members=new LinkedList<>(new_view.getMembers());
             assert 2 == members.size() : "members=" + members + ", local_addr=" + local_addr + ", view=" + new_view;
             Address dest=members.get(0);
-            Message unicast_msg=new Message(dest, null, null);
+            Message unicast_msg=new Message(dest);
             try {
                 channel.send(unicast_msg);
             }

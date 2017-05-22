@@ -1,10 +1,11 @@
 package org.jgroups.protocols;
 
-import java.io.DataInput;
-import java.io.DataOutput;
-
 import org.jgroups.Header;
 import org.jgroups.util.Util;
+
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.util.function.Supplier;
 
 public class SaslHeader extends Header {
     public enum Type {
@@ -21,7 +22,7 @@ public class SaslHeader extends Header {
         this.type = type;
         this.payload = payload;
     }
-
+    public short getMagicId() {return 85;}
     public byte[] getPayload() {
         return payload;
     }
@@ -52,6 +53,10 @@ public class SaslHeader extends Header {
         return this;
     }
 
+    public Supplier<? extends Header> create() {
+        return SaslHeader::new;
+    }
+
     @Override
     public void writeTo(DataOutput out) throws Exception {
         out.writeByte(type.ordinal());
@@ -65,7 +70,7 @@ public class SaslHeader extends Header {
     }
 
     @Override
-    public int size() {
+    public int serializedSize() {
         return Util.size(payload);
     }
 

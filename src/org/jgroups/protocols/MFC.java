@@ -1,7 +1,7 @@
 package org.jgroups.protocols;
 
 import org.jgroups.Address;
-import org.jgroups.Event;
+import org.jgroups.Header;
 import org.jgroups.Message;
 import org.jgroups.annotations.MBean;
 import org.jgroups.annotations.ManagedAttribute;
@@ -36,7 +36,8 @@ import java.util.concurrent.TimeUnit;
  */
 @MBean(description="Simple flow control protocol based on a credit system")
 public class MFC extends FlowControl {
-
+    protected final static FcHeader MFC_REPLENISH_HDR      = new FcHeader(FcHeader.REPLENISH);
+    protected final static FcHeader MFC_CREDIT_REQUEST_HDR = new FcHeader(FcHeader.CREDIT_REQUEST);
     
     
     /* --------------------------------------------- Fields ------------------------------------------------------ */
@@ -54,8 +55,6 @@ public class MFC extends FlowControl {
     /** Allows to unblock a blocked sender from an external program, e.g. JMX */
     @ManagedOperation(description="Unblock a sender")
     public void unblock() {
-        if(log.isTraceEnabled())
-            log.trace("unblocking the sender and replenishing all members");
         credits.replenishAll();
     }
 
@@ -79,9 +78,9 @@ public class MFC extends FlowControl {
         return credits.getAverageBlockTime();
     }
 
-    protected boolean handleMulticastMessage() {
-        return true;
-    }
+    protected boolean          handleMulticastMessage() {return true;}
+    @Override protected Header getReplenishHeader()     {return MFC_REPLENISH_HDR;}
+    @Override protected Header getCreditRequestHeader() {return MFC_CREDIT_REQUEST_HDR;}
 
    
     public void init() throws Exception {
@@ -99,9 +98,10 @@ public class MFC extends FlowControl {
         credits.reset();
     }
 
-    protected Object handleDownMessage(final Event evt, final Message msg, Address dest, int length) {
+    @Override
+    protected Object handleDownMessage(final Message msg, Address dest, int length) {
         if(dest != null) // 2nd line of defense, not really needed
-            return down_prot.down(evt);
+            return down_prot.down(msg);
 
         long block_time=max_block_times != null? getMaxBlockTime(length) : max_block_time;
         while(running) {
@@ -117,7 +117,7 @@ public class MFC extends FlowControl {
         }
         
         // send message - either after regular processing, or after blocking (when enough credits are available again)
-        return down_prot.down(evt);
+        return down_prot.down(msg);
     }
 
 

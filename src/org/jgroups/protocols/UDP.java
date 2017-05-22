@@ -11,6 +11,7 @@ import org.jgroups.stack.IpAddress;
 import org.jgroups.util.SuppressLog;
 import org.jgroups.util.Util;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.*;
@@ -62,6 +63,9 @@ public class UDP extends TP {
     @Property(description="Traffic class for sending unicast and multicast datagrams. Default is 8")
     protected int tos=8; // valid values: 2, 4, 8 (default), 16
 
+    protected static final String UCAST_NAME="ucast-receiver";
+    protected static final String MCAST_NAME="mcast-receiver";
+
     @Property(name="mcast_addr", description="The multicast address used for sending and receiving packets",
               defaultValueIPv4="228.8.8.8", defaultValueIPv6="ff0e::8:8:8",
               systemProperty=Global.UDP_MCAST_ADDR,writable=false)
@@ -98,6 +102,14 @@ public class UDP extends TP {
       "a datagram packet")
     protected long suppress_time_out_of_buffer_space=60000;
 
+   // @Property(description="Number of unicast receiver threads, all reading from the same DatagramSocket. " +
+    //  "If de-serialization is slow, increasing the number of receiver threads might yield better performance.")
+    protected int unicast_receiver_threads=1;
+
+    //@Property(description="Number of multicast receiver threads, all reading from the same MulticastSocket. " +
+    //  "If de-serialization is slow, increasing the number of receiver threads might yield better performance.")
+    protected int multicast_receiver_threads=1;
+
 
     /* --------------------------------------------- Fields ------------------------------------------------ */
 
@@ -117,13 +129,13 @@ public class UDP extends TP {
     protected MulticastSocket  sock;
 
     /** IP multicast socket for <em>receiving</em> multicast packets */
-    protected MulticastSocket mcast_sock=null;
+    protected MulticastSocket   mcast_sock;
 
     /** Runnable to receive multicast packets */
-    protected PacketReceiver  mcast_receiver=null;
+    protected PacketReceiver[]  mcast_receivers;
 
     /** Runnable to receive unicast packets */
-    protected PacketReceiver  ucast_receiver=null;
+    protected PacketReceiver[]  ucast_receivers;
 
     protected SuppressLog<InetAddress> suppress_log_out_of_buffer_space;
 
@@ -165,15 +177,16 @@ public class UDP extends TP {
         return ip_ttl;
     }
 
-    public void setMaxBundleSize(int size) {
+    public UDP setMaxBundleSize(int size) {
         super.setMaxBundleSize(size);
         if(size > Global.MAX_DATAGRAM_PACKET_SIZE)
             throw new IllegalArgumentException("max_bundle_size (" + size + ") cannot exceed the max datagram " +
                                                  "packet size of " + Global.MAX_DATAGRAM_PACKET_SIZE);
+        return this;
     }
 
     @ManagedAttribute(description="Number of messages dropped when sending because of insufficient buffer space")
-    public int getDroppedMessage() {
+    public int getDroppedMessages() {
         return suppress_log_out_of_buffer_space != null? suppress_log_out_of_buffer_space.getCache().size() : 0;
     }
 
@@ -181,6 +194,44 @@ public class UDP extends TP {
     public void clearDroppedMessagesCache() {
         if(suppress_log_out_of_buffer_space != null)
             suppress_log_out_of_buffer_space.getCache().clear();
+    }
+
+    @Property(description="Number of unicast receiver threads, all reading from the same DatagramSocket. " +
+      "If de-serialization is slow, increasing the number of receiver threads might yield better performance.")
+    public void setUcastReceiverThreads(int num) {
+        if(unicast_receiver_threads != num) {
+            unicast_receiver_threads=num;
+            if(ucast_receivers != null) {
+                stopUcastReceiverThreads();
+                ucast_receivers=createReceivers(unicast_receiver_threads, sock, UCAST_NAME);
+                startUcastReceiverThreads();
+            }
+        }
+    }
+
+    @Property(description="Number of unicast receiver threads, all reading from the same DatagramSocket. " +
+      "If de-serialization is slow, increasing the number of receiver threads might yield better performance.")
+    public int getUcastReceiverThreads() {
+        return unicast_receiver_threads;
+    }
+
+    @Property(description="Number of multicast receiver threads, all reading from the same MulticastSocket. " +
+          "If de-serialization is slow, increasing the number of receiver threads might yield better performance.")
+    public void setMcastReceiverThreads(int num) {
+        if(multicast_receiver_threads != num) {
+            multicast_receiver_threads=num;
+            if(mcast_receivers != null) {
+                stopMcastReceiverThreads();
+                mcast_receivers=createReceivers(multicast_receiver_threads, mcast_sock, MCAST_NAME);
+                startMcastReceiverThreads();
+            }
+        }
+    }
+
+    @Property(description="Number of multicast receiver threads, all reading from the same MulticastSocket. " +
+      "If de-serialization is slow, increasing the number of receiver threads might yield better performance.")
+    public int getMcastReceiverThreads() {
+        return multicast_receiver_threads;
     }
 
     public String getInfo() {
@@ -255,30 +306,21 @@ public class UDP extends TP {
             destroySockets();
             throw ex;
         }
-        ucast_receiver=new PacketReceiver(sock, "unicast receiver", this::closeUnicastSocket);
-
+        ucast_receivers=createReceivers(unicast_receiver_threads, sock, UCAST_NAME);
         if(ip_mcast)
-            mcast_receiver=new PacketReceiver(mcast_sock, "multicast receiver", this::closeMulticastSocket);
+            mcast_receivers=createReceivers(multicast_receiver_threads, mcast_sock, MCAST_NAME);
     }
 
 
     public void stop() {
-        if(log.isDebugEnabled()) log.debug("closing sockets and stopping threads");
-        stopThreads();  // will close sockets, closeSockets() is not really needed anymore, but...
-        super.stop();
-    }
-
-    public void destroy() {
-        super.destroy();
+        log.debug("closing sockets and stopping threads");
         destroySockets();
+        stopThreads();
+        super.stop();
     }
 
     protected void handleConnect() throws Exception {
         startThreads();
-    }
-
-    protected void handleDisconnect() {
-        stopThreads();
     }
 
     /*--------------------------- End of Protocol interface -------------------------- */
@@ -385,6 +427,14 @@ public class UDP extends TP {
         closeUnicastSocket();
     }
 
+    protected PacketReceiver[] createReceivers(int num, DatagramSocket sock, String name) {
+        PacketReceiver[] receivers=new PacketReceiver[num];
+        for(int i=0; i < num; i++)
+            receivers[i]=new PacketReceiver(sock, name);
+        return receivers;
+    }
+
+
     protected IpAddress createLocalAddress() {
         if(sock == null || sock.isClosed())
             return null;
@@ -440,8 +490,7 @@ public class UDP extends TP {
                 log.trace("joined %s on %s", tmp_mcast_addr, intf.getName());
             }
             catch(IOException e) {
-                if(log.isWarnEnabled())
-                    log.warn(Util.getMessage("InterfaceJoinFailed"), tmp_mcast_addr, intf.getName());
+                log.warn(Util.getMessage("InterfaceJoinFailed"), tmp_mcast_addr, intf.getName());
             }
         }
     }
@@ -559,27 +608,30 @@ public class UDP extends TP {
     }
 
 
-
-    /**
-     * Starts the unicast and multicast receiver threads
-     */
-    void startThreads() throws Exception {
-        ucast_receiver.start();
-        if(mcast_receiver != null)
-            mcast_receiver.start();
+    protected void startThreads() throws Exception {
+        startUcastReceiverThreads();
+        startMcastReceiverThreads();
     }
 
-
-    /**
-     * Stops unicast and multicast receiver threads
-     */
-    void stopThreads() {
-        if(mcast_receiver != null)
-            mcast_receiver.stop();
-        if(ucast_receiver != null)
-            ucast_receiver.stop();
+    protected void startUcastReceiverThreads() {
+        if(ucast_receivers != null)
+            for(PacketReceiver r: ucast_receivers)
+                r.start();
     }
 
+    protected void startMcastReceiverThreads() {
+        if(mcast_receivers != null)
+            for(PacketReceiver r: mcast_receivers)
+                r.start();
+    }
+
+    protected void stopThreads() {
+        stopMcastReceiverThreads();
+        stopUcastReceiverThreads();
+    }
+
+    protected void stopUcastReceiverThreads() {Util.close(ucast_receivers);}
+    protected void stopMcastReceiverThreads() {Util.close(mcast_receivers);}
 
     protected void handleConfigEvent(Map<String,Object> map) {
         boolean set_buffers=false;
@@ -606,16 +658,14 @@ public class UDP extends TP {
     /* ----------------------------- Inner Classes ---------------------------------------- */
 
 
-    public class PacketReceiver implements Runnable {
+    public class PacketReceiver implements Runnable, Closeable {
         private       Thread         thread=null;
         private final DatagramSocket receiver_socket;
         private final String         name;
-        private final Runnable       close_strategy;
 
-        public PacketReceiver(DatagramSocket socket, String name, Runnable close_strategy) {
+        public PacketReceiver(DatagramSocket socket, String name) {
             this.receiver_socket=socket;
             this.name=name;
-            this.close_strategy=close_strategy;
         }
 
         public synchronized void start() {
@@ -625,17 +675,11 @@ public class UDP extends TP {
             }
         }
 
+        public void close() throws IOException {stop();}
+
         public synchronized void stop() {
             Thread tmp=thread;
             thread=null;
-            try {
-                close_strategy.run();
-            }
-            catch(Exception e1) {
-            }
-            finally {
-                Util.close(receiver_socket); // second line of defense
-            }
 
             if(tmp != null && tmp.isAlive()) {
                 tmp.interrupt();
@@ -655,7 +699,6 @@ public class UDP extends TP {
 
             while(thread != null && Thread.currentThread().equals(thread)) {
                 try {
-
                     // solves Android ISSUE #24748 - DatagramPacket truncated UDP in ICS
                     if(is_android)
                         packet.setLength(receive_buf.length);
@@ -670,14 +713,13 @@ public class UDP extends TP {
                 }
                 catch(SocketException sock_ex) {
                     if(receiver_socket.isClosed()) {
-                        if(log.isDebugEnabled()) log.debug("receiver socket is closed, exception=" + sock_ex);
+                        log.debug("receiver socket is closed, exception=" + sock_ex);
                         break;
                     }
                     log.error(Util.getMessage("FailedReceivingPacket"), sock_ex);
                 }
                 catch(Throwable ex) {
-                    if(log.isErrorEnabled())
-                        log.error(Util.getMessage("FailedReceivingPacket"), ex);
+                    log.error(Util.getMessage("FailedReceivingPacket"), ex);
                 }
             }
             if(log.isDebugEnabled()) log.debug(name + " thread terminated");

@@ -11,6 +11,7 @@ import org.jgroups.protocols.pbcast.STABLE;
 import org.jgroups.protocols.relay.SiteMaster;
 import org.jgroups.protocols.relay.SiteUUID;
 import org.jgroups.stack.IpAddress;
+import org.jgroups.stack.IpAddressUUID;
 import org.jgroups.stack.Protocol;
 import org.jgroups.stack.ProtocolStack;
 
@@ -28,11 +29,14 @@ import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.text.NumberFormat;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import static java.lang.System.nanoTime;
+import static org.jgroups.protocols.TP.LIST;
+import static org.jgroups.protocols.TP.MULTICAST;
 
 
 /**
@@ -41,7 +45,7 @@ import java.util.regex.Pattern;
  */
 public class Util {
 
-    private static final NumberFormat f;
+    // private static final NumberFormat f;
 
     private static final Map<Class<? extends Object>,Byte> PRIMITIVE_TYPES=new HashMap<>(15);
     private static final byte TYPE_NULL         =  0;
@@ -55,9 +59,10 @@ public class Util {
     private static final byte TYPE_INT          = 15;
     private static final byte TYPE_LONG         = 16;
     private static final byte TYPE_SHORT        = 17;
-    private static final byte TYPE_STRING       = 18;
+    private static final byte TYPE_STRING       = 18; // ascii
     private static final byte TYPE_BYTEARRAY    = 19;
     private static final byte TYPE_EXCEPTION    = 20;
+    private static final byte TYPE_UTF_STRING   = 21; // multibyte charset
 
     // constants
     public static final int MAX_PORT=65535; // highest port allocatable
@@ -92,10 +97,10 @@ public class Util {
     static {
         resource_bundle=ResourceBundle.getBundle("jg-messages",Locale.getDefault(),Util.class.getClassLoader());
 
-        f=NumberFormat.getNumberInstance();
-        f.setGroupingUsed(false);
+        /*f=NumberFormat.getNumberInstance();
+        f.setGroupingUsed(true);
         // f.setMinimumFractionDigits(2);
-        f.setMaximumFractionDigits(2);
+        f.setMaximumFractionDigits(2);*/
 
         PRIMITIVE_TYPES.put(Boolean.class,TYPE_BOOLEAN);
         PRIMITIVE_TYPES.put(Byte.class,TYPE_BYTE);
@@ -259,22 +264,21 @@ public class Util {
      * @param channels The channels which should form the view. The expected view size is channels.length.
      *                 Must be non-null
      */
-    public static void waitUntilAllChannelsHaveSameSize(long timeout,long interval,JChannel... channels) throws TimeoutException {
-        int size=channels.length;
-
+    public static void waitUntilAllChannelsHaveSameView(long timeout, long interval, JChannel... channels) throws TimeoutException {
         if(interval >= timeout || timeout <= 0)
             throw new IllegalArgumentException("interval needs to be smaller than timeout or timeout needs to be > 0");
         long target_time=System.currentTimeMillis() + timeout;
         while(System.currentTimeMillis() <= target_time) {
-            boolean all_channels_have_correct_size=true;
+            boolean all_channels_have_correct_view=true;
+            View first=channels[0].getView();
             for(JChannel ch : channels) {
                 View view=ch.getView();
-                if(view == null || view.size() != size) {
-                    all_channels_have_correct_size=false;
+                if(!Objects.equals(view, first) || view.size() != channels.length) {
+                    all_channels_have_correct_view=false;
                     break;
                 }
             }
-            if(all_channels_have_correct_size)
+            if(all_channels_have_correct_view)
                 return;
             Util.sleep(interval);
         }
@@ -284,10 +288,33 @@ public class Util {
             views[i]=channels[i].getView();
             sb.append(channels[i].getName()).append(": ").append(views[i]).append("\n");
         }
+        View first=channels[0].getView();
         for(View view : views)
-            if(view == null || view.size() != size)
+            if(!Objects.equals(view, first))
                 throw new TimeoutException("Timeout " + timeout + " kicked in, views are:\n" + sb);
     }
+
+    public static boolean allChannelsHaveSameView(JChannel... channels) {
+        View first=channels[0].getView();
+        for(JChannel ch : channels) {
+            View view=ch.getView();
+            if(!Objects.equals(view, first) || view.size() != channels.length)
+                return false;
+        }
+        return true;
+    }
+
+    public static void assertAllChannelsHaveSameView(JChannel ... channels) {
+        assert allChannelsHaveSameView(channels) : String.format("channels have different views:\n%s\n", printViews(channels));
+    }
+
+    public static String printViews(JChannel ... channels) {
+        StringBuilder sb=new StringBuilder();
+        for(JChannel ch: channels)
+            sb.append(String.format("%s: %s\n", ch.name(), ch.getView()));
+        return sb.toString();
+    }
+
 
 
     /**
@@ -398,7 +425,7 @@ public class Util {
         discard.setDiscardAll(true);
         ProtocolStack stack=ch.getProtocolStack();
         TP transport=stack.getTransport();
-        stack.insertProtocol(discard,ProtocolStack.ABOVE,transport.getClass());
+        stack.insertProtocol(discard,ProtocolStack.Position.ABOVE,transport.getClass());
 
         //abruptly shutdown FD_SOCK just as in real life when member gets killed non gracefully
         FD_SOCK fd=ch.getProtocolStack().findProtocol(FD_SOCK.class);
@@ -472,6 +499,9 @@ public class Util {
             case TYPE_LONG:    return (T)(Long)Bits.readLong(buffer, offset);
             case TYPE_SHORT:   return (T)(Short)Bits.readShort(buffer, offset);
             case TYPE_STRING:  return (T)new String(buffer, offset, length);
+            case TYPE_UTF_STRING:
+                in=new ByteArrayDataInputStream(buffer, offset, length);
+                return (T)in.readUTF();
             case TYPE_BYTEARRAY:
                 byte[] tmp=new byte[length];
                 System.arraycopy(buffer,offset,tmp,0,length);
@@ -503,7 +533,8 @@ public class Util {
         }
 
         if(obj instanceof Streamable) {
-            final ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(512, true);
+            int expected_size=obj instanceof SizeStreamable? ((SizeStreamable)obj).serializedSize() : 512;
+            final ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(expected_size, true);
             out.write(TYPE_STREAMABLE);
             writeGenericStreamable((Streamable)obj,out);
             return Arrays.copyOf(out.buf,out.position());
@@ -520,57 +551,7 @@ public class Util {
             }
         }
 
-        switch(type) {
-            case TYPE_BOOLEAN:
-                return ((Boolean)obj)? TYPE_BOOLEAN_TRUE : TYPE_BOOLEAN_FALSE;
-            case TYPE_BYTE:
-                return new byte[]{TYPE_BYTE, (byte)obj};
-            case TYPE_CHAR:
-                byte[] buf=new byte[Global.BYTE_SIZE *3];
-                buf[0]=TYPE_CHAR;
-                Bits.writeChar((char)obj, buf, 1);
-                return buf;
-            case TYPE_DOUBLE:
-                buf=new byte[Global.BYTE_SIZE + Global.DOUBLE_SIZE];
-                buf[0]=TYPE_DOUBLE;
-                Bits.writeDouble((double)obj, buf, 1);
-                return buf;
-            case TYPE_FLOAT:
-                buf=new byte[Global.BYTE_SIZE + Global.FLOAT_SIZE];
-                buf[0]=TYPE_FLOAT;
-                Bits.writeFloat((float)obj, buf, 1);
-                return buf;
-            case TYPE_INT:
-                buf=new byte[Global.BYTE_SIZE + Global.INT_SIZE];
-                buf[0]=TYPE_INT;
-                Bits.writeInt((int)obj, buf, 1);
-                return buf;
-            case TYPE_LONG:
-                buf=new byte[Global.BYTE_SIZE + Global.LONG_SIZE];
-                buf[0]=TYPE_LONG;
-                Bits.writeLong((long)obj, buf, 1);
-                return buf;
-            case TYPE_SHORT:
-                buf=new byte[Global.BYTE_SIZE + Global.SHORT_SIZE];
-                buf[0]=TYPE_SHORT;
-                Bits.writeShort((short)obj, buf, 1);
-                return buf;
-            case TYPE_STRING:
-                String str=(String)obj;
-                int len=str.length();
-                ByteBuffer retval=ByteBuffer.allocate(Global.BYTE_SIZE + len).put(TYPE_STRING);
-                for(int i=0; i < len; i++)
-                    retval.put((byte)str.charAt(i));
-                return retval.array();
-            case TYPE_BYTEARRAY:
-                buf=(byte[])obj;
-                byte[] buffer=new byte[Global.BYTE_SIZE + buf.length];
-                buffer[0]=TYPE_BYTEARRAY;
-                System.arraycopy(buf, 0, buffer, 1, buf.length);
-                return buffer;
-            default:
-                throw new IllegalArgumentException("type " + type + " is invalid");
-        }
+        return marshalPrimitiveType(type, obj);
     }
 
 
@@ -586,7 +567,8 @@ public class Util {
         }
 
         if(obj instanceof Streamable) {
-            final ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(512, true);
+            int expected_size=obj instanceof SizeStreamable? ((SizeStreamable)obj).serializedSize() : 512;
+            final ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(expected_size, true);
             out.write(TYPE_STREAMABLE);
             writeGenericStreamable((Streamable)obj,out);
             return out.getBuffer();
@@ -602,59 +584,74 @@ public class Util {
                 return out_stream.getBuffer();
             }
         }
-
-        switch(type) {
-            case TYPE_BOOLEAN:
-                return new Buffer(((Boolean)obj)? TYPE_BOOLEAN_TRUE : TYPE_BOOLEAN_FALSE);
-            case TYPE_BYTE:
-                return new Buffer(new byte[]{TYPE_BYTE, (byte)obj});
-            case TYPE_CHAR:
-                byte[] buf=new byte[Global.BYTE_SIZE *3];
-                buf[0]=TYPE_CHAR;
-                Bits.writeChar((char)obj, buf, 1);
-                return new Buffer(buf);
-            case TYPE_DOUBLE:
-                buf=new byte[Global.BYTE_SIZE + Global.DOUBLE_SIZE];
-                buf[0]=TYPE_DOUBLE;
-                Bits.writeDouble((double)obj, buf, 1);
-                return new Buffer(buf);
-            case TYPE_FLOAT:
-                buf=new byte[Global.BYTE_SIZE + Global.FLOAT_SIZE];
-                buf[0]=TYPE_FLOAT;
-                Bits.writeFloat((float)obj, buf, 1);
-                return new Buffer(buf);
-            case TYPE_INT:
-                buf=new byte[Global.BYTE_SIZE + Global.INT_SIZE];
-                buf[0]=TYPE_INT;
-                Bits.writeInt((int)obj, buf, 1);
-                return new Buffer(buf);
-            case TYPE_LONG:
-                buf=new byte[Global.BYTE_SIZE + Global.LONG_SIZE];
-                buf[0]=TYPE_LONG;
-                Bits.writeLong((long)obj, buf, 1);
-                return new Buffer(buf);
-            case TYPE_SHORT:
-                buf=new byte[Global.BYTE_SIZE + Global.SHORT_SIZE];
-                buf[0]=TYPE_SHORT;
-                Bits.writeShort((short)obj, buf, 1);
-                return new Buffer(buf);
-            case TYPE_STRING:
-                String str=(String)obj;
-                int len=str.length();
-                ByteBuffer retval=ByteBuffer.allocate(Global.BYTE_SIZE + len).put(TYPE_STRING);
-                for(int i=0; i < len; i++)
-                    retval.put((byte)str.charAt(i));
-                return new Buffer(retval.array());
-            case TYPE_BYTEARRAY:
-                buf=(byte[])obj;
-                byte[] buffer=new byte[Global.BYTE_SIZE + buf.length];
-                buffer[0]=TYPE_BYTEARRAY;
-                System.arraycopy(buf, 0, buffer, 1, buf.length);
-                return new Buffer(buffer);
-            default:
-                throw new IllegalArgumentException("type " + type + " is invalid");
-        }
+        return new Buffer(marshalPrimitiveType(type, obj));
     }
+
+
+    protected static byte[] marshalPrimitiveType(byte type, Object obj) {
+          switch(type) {
+              case TYPE_BOOLEAN:
+                  return ((Boolean)obj)? TYPE_BOOLEAN_TRUE : TYPE_BOOLEAN_FALSE;
+              case TYPE_BYTE:
+                  return new byte[]{TYPE_BYTE, (byte)obj};
+              case TYPE_CHAR:
+                  byte[] buf=new byte[Global.BYTE_SIZE *3];
+                  buf[0]=TYPE_CHAR;
+                  Bits.writeChar((char)obj, buf, 1);
+                  return buf;
+              case TYPE_DOUBLE:
+                  buf=new byte[Global.BYTE_SIZE + Global.DOUBLE_SIZE];
+                  buf[0]=TYPE_DOUBLE;
+                  Bits.writeDouble((double)obj, buf, 1);
+                  return buf;
+              case TYPE_FLOAT:
+                  buf=new byte[Global.BYTE_SIZE + Global.FLOAT_SIZE];
+                  buf[0]=TYPE_FLOAT;
+                  Bits.writeFloat((float)obj, buf, 1);
+                  return buf;
+              case TYPE_INT:
+                  buf=new byte[Global.BYTE_SIZE + Global.INT_SIZE];
+                  buf[0]=TYPE_INT;
+                  Bits.writeInt((int)obj, buf, 1);
+                  return buf;
+              case TYPE_LONG:
+                  buf=new byte[Global.BYTE_SIZE + Global.LONG_SIZE];
+                  buf[0]=TYPE_LONG;
+                  Bits.writeLong((long)obj, buf, 1);
+                  return buf;
+              case TYPE_SHORT:
+                  buf=new byte[Global.BYTE_SIZE + Global.SHORT_SIZE];
+                  buf[0]=TYPE_SHORT;
+                  Bits.writeShort((short)obj, buf, 1);
+                  return buf;
+              case TYPE_STRING:
+                  String str=(String)obj;
+                  if(Util.isAsciiString(str)) {
+                      int len=str.length();
+                      ByteBuffer retval=ByteBuffer.allocate(Global.BYTE_SIZE + len).put(TYPE_STRING);
+                      for(int i=0; i < len; i++)
+                          retval.put((byte)str.charAt(i));
+                      return retval.array();
+                  }
+                  else {
+                      ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(str.length()*2 +3);
+                      out.write(TYPE_UTF_STRING);
+                      out.writeUTF(str);
+                      byte[] ret=new byte[out.position()];
+                      System.arraycopy(out.buffer(), 0, ret, 0, ret.length);
+                      return ret;
+                  }
+              case TYPE_BYTEARRAY:
+                  buf=(byte[])obj;
+                  byte[] buffer=new byte[Global.BYTE_SIZE + buf.length];
+                  buffer[0]=TYPE_BYTEARRAY;
+                  System.arraycopy(buf, 0, buffer, 1, buf.length);
+                  return buffer;
+              default:
+                  throw new IllegalArgumentException("type " + type + " is invalid");
+          }
+      }
+
 
 
     public static void objectToStream(Object obj, DataOutput out) throws Exception {
@@ -675,7 +672,8 @@ public class Util {
             writeGenericStreamable((Streamable)obj,out);
         }
         else if((type=PRIMITIVE_TYPES.get(obj.getClass())) != null) {
-            out.write(type);
+            if(type != TYPE_STRING)
+                out.write(type);
             switch(type) {
                 case TYPE_BOOLEAN:
                     out.writeBoolean((Boolean)obj);
@@ -703,16 +701,15 @@ public class Util {
                     break;
                 case TYPE_STRING:
                     String str=(String)obj;
-                    if(str.length() > Short.MAX_VALUE) {
-                        out.writeBoolean(true);
-                        try(ObjectOutputStream oos=new ObjectOutputStream(out instanceof ByteArrayDataOutputStream?
-                                                                            new OutputStreamAdapter((ByteArrayDataOutputStream)out) :
-                                                                            (OutputStream)out)) {
-                            oos.writeObject(str);
-                        }
+                    if(Util.isAsciiString(str)) {
+                        int len=str.length();
+                        out.write(TYPE_STRING);
+                        out.writeInt(len);
+                        for(int i=0; i < len; i++)
+                            out.write((byte)str.charAt(i));
                     }
                     else {
-                        out.writeBoolean(false);
+                        out.write(TYPE_UTF_STRING);
                         out.writeUTF(str);
                     }
                     break;
@@ -765,15 +762,15 @@ public class Util {
             case TYPE_LONG:       return (T)(Long)in.readLong();
             case TYPE_SHORT:      return (T)(Short)in.readShort();
             case TYPE_STRING:
-                if(in.readBoolean()) { // large string
-                    try(ObjectInputStream ois=new ObjectInputStream(in instanceof ByteArrayDataInputStream?
-                                                                      new org.jgroups.util.InputStreamAdapter((ByteArrayDataInputStream)in) :
-                                                                      (InputStream)in)) {
-                        return (T)ois.readObject();
-                    }
+                int str_len=in.readInt();
+                if(str_len == 0) return (T)"";
+                byte[] tmp=new byte[str_len];
+                for(int i=0; i < str_len; i++) {
+                    tmp[i]=in.readByte();
                 }
-                else
-                    return (T)in.readUTF();
+                return (T)new String(tmp);
+            case TYPE_UTF_STRING:
+                return (T)in.readUTF();
             case TYPE_BYTEARRAY:
                 int len=in.readInt();
                 byte[] tmpbuf=new byte[len];
@@ -967,13 +964,15 @@ public class Util {
 
 
     public static byte[] streamableToByteBuffer(Streamable obj) throws Exception {
-        final ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(512);
+        int expected_size=obj instanceof SizeStreamable? ((SizeStreamable)obj).serializedSize() : 512;
+        final ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(expected_size);
         obj.writeTo(out);
         return Arrays.copyOf(out.buffer(), out.position());
     }
 
     public static Buffer streamableToBuffer(Streamable obj) {
-        final ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(512);
+        int expected_size=obj instanceof SizeStreamable? ((SizeStreamable)obj).serializedSize() +1 : 512;
+        final ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(expected_size);
         try {
             Util.writeStreamable(obj,out);
             return out.getBuffer();
@@ -985,7 +984,7 @@ public class Util {
 
 
     public static byte[] collectionToByteBuffer(Collection<Address> c) throws Exception {
-        final ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(512);
+        final ByteArrayDataOutputStream out=new ByteArrayDataOutputStream((int)Util.size(c));
         Util.writeAddresses(c,out);
         return Arrays.copyOf(out.buffer(), out.position());
     }
@@ -1000,6 +999,28 @@ public class Util {
 
     public static String bytesToString(byte[] bytes) {
         return bytes != null? new String(bytes) : null;
+    }
+
+    public static String byteArrayToHexString(byte[] b) {
+        if(b == null)
+            return "null";
+        StringBuilder sb = new StringBuilder(b.length * 2);
+        for (int i = 0; i < b.length; i++){
+            int v = b[i] & 0xff;
+            if (v < 16) { sb.append('0'); }
+            sb.append(Integer.toHexString(v));
+        }
+        return sb.toString().toUpperCase();
+    }
+
+    public static boolean isAsciiString(String str) {
+        if(str == null) return false;
+        for(int i=0; i < str.length(); i++) {
+            int ch=str.charAt(i);
+            if(ch >= 128)
+                return false;
+        }
+        return true;
     }
 
     /** Compares 2 byte arrays, elements are treated as unigned */
@@ -1025,6 +1046,217 @@ public class Util {
         if(type == double.class  || type == Double.class)  return Double.valueOf(arg);
         return arg;
     }
+
+
+
+    /**
+     * This method needs to be synchronized on out_stream when it is called
+     * @param msg
+     * @throws java.io.IOException
+     */
+    public static void writeMessage(Message msg, DataOutput dos, boolean multicast) throws Exception {
+        byte flags=0;
+        dos.writeShort(Version.version); // write the version
+        if(multicast)
+            flags+=MULTICAST;
+        dos.writeByte(flags);
+        msg.writeTo(dos);
+    }
+
+    public static Message readMessage(DataInput instream) throws Exception {
+        Message msg=new Message(false); // don't create headers, readFrom() will do this
+        msg.readFrom(instream);
+        return msg;
+    }
+
+
+
+    /**
+     * Write a list of messages with the *same* destination and src addresses. The message list is
+     * marshalled as follows (see doc/design/MarshallingFormat.txt for details):
+     * <pre>
+     * List: * | version | flags | dest | src | cluster-name | [Message*] |
+     *
+     * Message:  | presence | leading | flags | [src] | length | [buffer] | size | [Headers*] |
+     *
+     * </pre>
+     * @param dest
+     * @param src
+     * @param msgs
+     * @param dos
+     * @param multicast
+     * @throws Exception
+     */
+    public static void writeMessageList(Address dest, Address src, byte[] cluster_name,
+                                        List<Message> msgs, DataOutput dos, boolean multicast, short transport_id) throws Exception {
+        writeMessageListHeader(dest, src, cluster_name, msgs != null ? msgs.size() : 0, dos, multicast);
+
+        if(msgs != null)
+            for(Message msg: msgs)
+                msg.writeToNoAddrs(src, dos, transport_id); // exclude the transport header
+    }
+
+    public static void writeMessageListHeader(Address dest, Address src, byte[] cluster_name, int numMsgs, DataOutput dos, boolean multicast) throws Exception {
+        dos.writeShort(Version.version);
+
+        byte flags=LIST;
+        if(multicast)
+            flags+=MULTICAST;
+
+        dos.writeByte(flags);
+
+        Util.writeAddress(dest, dos);
+
+        Util.writeAddress(src, dos);
+
+        dos.writeShort(cluster_name != null? cluster_name.length : -1);
+        if(cluster_name != null)
+            dos.write(cluster_name);
+
+        dos.writeInt(numMsgs);
+    }
+
+
+    public static List<Message> readMessageList(DataInput in, short transport_id) throws Exception {
+        List<Message> list=new LinkedList<>();
+        Address dest=Util.readAddress(in);
+        Address src=Util.readAddress(in);
+        // AsciiString cluster_name=Bits.readAsciiString(in); // not used here
+        short length=in.readShort();
+        byte[] cluster_name=length >= 0? new byte[length] : null;
+        if(cluster_name != null)
+            in.readFully(cluster_name, 0, cluster_name.length);
+
+        int len=in.readInt();
+
+        for(int i=0; i < len; i++) {
+            Message msg=new Message(false);
+            msg.readFrom(in);
+            msg.setDest(dest);
+            if(msg.getSrc() == null)
+                msg.setSrc(src);
+
+            // Now add a TpHeader back on, was not marshalled. Every message references the *same* TpHeader, saving memory !
+            msg.putHeader(transport_id, new TpHeader(cluster_name));
+
+            list.add(msg);
+        }
+        return list;
+    }
+
+    /**
+     * Reads a list of messages into 4 MessageBatches:
+     * <ol>
+     *     <li>regular</li>
+     *     <li>OOB</li>
+     *     <li>INTERNAL-OOB (INTERNAL and OOB)</li>
+     *     <li>INTERNAL (INTERNAL)</li>
+     * </ol>
+     * @param in
+     * @return an array of 4 MessageBatches in the order above, the first batch is at index 0
+     * @throws Exception
+     */
+    public static MessageBatch[] readMessageBatch(DataInput in, boolean multicast) throws Exception {
+        MessageBatch[] batches=new MessageBatch[4]; // [0]: reg, [1]: OOB, [2]: internal-oob, [3]: internal
+        Address dest=Util.readAddress(in);
+        Address src=Util.readAddress(in);
+        short length=in.readShort();
+        byte[] cluster_name=length >= 0? new byte[length] : null;
+        if(cluster_name != null)
+            in.readFully(cluster_name, 0, cluster_name.length);
+
+        int len=in.readInt();
+        for(int i=0; i < len; i++) {
+            Message msg=new Message(false);
+            msg.readFrom(in);
+            msg.setDest(dest);
+            if(msg.getSrc() == null)
+                msg.setSrc(src);
+            boolean oob=msg.isFlagSet(Message.Flag.OOB);
+            boolean internal=msg.isFlagSet(Message.Flag.INTERNAL);
+            int index=0;
+            MessageBatch.Mode mode=MessageBatch.Mode.REG;
+
+            if(oob && !internal) {
+                index=1; mode=MessageBatch.Mode.OOB;
+            }
+            else if(oob && internal) {
+                index=2; mode=MessageBatch.Mode.OOB;
+            }
+            else if(!oob && internal) {
+                index=3; mode=MessageBatch.Mode.INTERNAL;
+            }
+
+            if(batches[index] == null)
+                batches[index]=new MessageBatch(dest, src, cluster_name != null? new AsciiString(cluster_name) : null, multicast, mode, len);
+            batches[index].add(msg);
+        }
+        return batches;
+    }
+
+    public static List<Message> parse(byte[] buf, int offset, int length) {
+        return parse(new ByteArrayInputStream(buf, offset, length));
+    }
+
+    public static List<Message> parse(String filename) throws FileNotFoundException {
+        return parse(new FileInputStream(filename));
+    }
+
+    public static List<Message> parse(InputStream input) {
+        List<Message>   retval=new ArrayList<>();
+        DataInputStream dis=null;
+        try {
+            dis=new DataInputStream(input);
+
+            short version;
+            for(;;) {
+                try {
+                    version=dis.readShort();
+                }
+                catch(IOException io_ex) {
+                    break;
+                }
+
+                System.out.println("version = " + version + " (" + Version.print(version) + ")");
+                byte flags=dis.readByte();
+                // System.out.println("flags: " + Message.flagsToString(flags));
+
+                boolean is_message_list=(flags & LIST) == LIST;
+                boolean multicast=(flags & MULTICAST) == MULTICAST;
+
+                if(is_message_list) { // used if message bundling is enabled
+                    final MessageBatch[] batches=Util.readMessageBatch(dis,multicast);
+                    for(MessageBatch batch: batches) {
+                        if(batch != null)
+                            for(Message msg: batch)
+                                retval.add(msg);
+                    }
+                }
+                else {
+                    Message msg=Util.readMessage(dis);
+                    retval.add(msg);
+                }
+            }
+            return retval;
+        }
+        catch(Throwable t) {
+            t.printStackTrace();
+            return null;
+        }
+        finally {
+            Util.close(dis);
+        }
+    }
+
+    public static String dump(byte[] buf, int offset, int length) {
+        StringBuilder sb=new StringBuilder();
+        List<Message> msgs=parse(new ByteArrayInputStream(buf, offset, length));
+        if(msgs != null)
+            for(Message msg: msgs)
+                sb.append(String.format("dst=%s src=%s (%d bytes): hdrs= %s\n", msg.dest(), msg.src(), msg.getLength(), msg.printHeaders()));
+        return sb.toString();
+    }
+
 
     public static void writeView(View view,DataOutput out) throws Exception {
         if(view == null) {
@@ -1089,8 +1321,10 @@ public class Util {
             else
                 streamable_addr=false;
         }
-        else if(addr instanceof IpAddress)
+        else if(addr.getClass().equals(IpAddress.class))
             flags=Util.setFlag(flags,Address.IP_ADDR);
+        else if(addr.getClass().equals(IpAddressUUID.class))
+            flags=Util.setFlag(flags, Address.IP_ADDR_UUID);
         else
             streamable_addr=false;
         out.writeByte(flags);
@@ -1122,6 +1356,10 @@ public class Util {
             addr=new IpAddress();
             addr.readFrom(in);
         }
+        else if(Util.isFlagSet(flags, Address.IP_ADDR_UUID)) {
+            addr=new IpAddressUUID();
+            addr.readFrom(in);
+        }
         else {
             addr=readOtherAddress(in);
         }
@@ -1136,13 +1374,13 @@ public class Util {
         if(addr instanceof UUID) {
             Class<? extends Address> clazz=addr.getClass();
             if(clazz.equals(UUID.class) || clazz.equals(SiteUUID.class) || clazz.equals(SiteMaster.class))
-                return retval + addr.size();
+                return retval + addr.serializedSize();
         }
         if(addr instanceof IpAddress)
-            return retval + addr.size();
+            return retval + addr.serializedSize();
 
         retval+=Global.SHORT_SIZE; // magic number
-        retval+=addr.size();
+        retval+=addr.serializedSize();
         return retval;
     }
 
@@ -1169,18 +1407,12 @@ public class Util {
     }
 
     public static int size(byte[] buf) {
-        int retval=Global.BYTE_SIZE + Global.INT_SIZE;
-        if(buf != null)
-            retval+=buf.length;
-        return retval;
+        return buf == null? Global.BYTE_SIZE : Global.BYTE_SIZE + Global.INT_SIZE + buf.length;
     }
 
     private static Address readOtherAddress(DataInput in) throws Exception {
         short magic_number=in.readShort();
-        Class<?> cl=ClassConfigurator.get(magic_number);
-        if(cl == null)
-            throw new RuntimeException("class for magic number " + magic_number + " not found");
-        Address addr=(Address)cl.newInstance();
+        Address addr=ClassConfigurator.create(magic_number);
         addr.readFrom(in);
         return addr;
     }
@@ -1331,16 +1563,14 @@ public class Util {
 
         Class<?> clazz;
         if(magic_number != -1) {
-            clazz=ClassConfigurator.get(magic_number);
-            if(clazz == null)
-                throw new ClassNotFoundException("Class for magic number " + magic_number + " cannot be found.");
+            retval=ClassConfigurator.create(magic_number);
         }
         else {
             String classname=in.readUTF();
             clazz=ClassConfigurator.get(classname, loader);
+            retval=(T)clazz.newInstance();
         }
 
-        retval=(T)clazz.newInstance();
         retval.readFrom(in);
         return retval;
     }
@@ -1367,35 +1597,7 @@ public class Util {
         return retval;
     }
 
-    public static void writeClass(Class<?> classObject,DataOutput out) throws Exception {
-        short magic_number=ClassConfigurator.getMagicNumber(classObject);
-        // write the magic number or the class name
-        if(magic_number == -1) {
-            out.writeBoolean(false);
-            out.writeUTF(classObject.getName());
-        }
-        else {
-            out.writeBoolean(true);
-            out.writeShort(magic_number);
-        }
-    }
 
-    public static Class<?> readClass(DataInput in) throws Exception {
-        Class<?> clazz;
-        boolean use_magic_number=in.readBoolean();
-        if(use_magic_number) {
-            short magic_number=in.readShort();
-            clazz=ClassConfigurator.get(magic_number);
-            if(clazz == null)
-                throw new ClassNotFoundException("Class for magic number " + magic_number + " cannot be found.");
-        }
-        else {
-            String classname=in.readUTF();
-            clazz=ClassConfigurator.get(classname);
-        }
-
-        return clazz;
-    }
 
     public static void writeObject(Object obj,DataOutput out) throws Exception {
         if(obj instanceof Streamable) {
@@ -1527,9 +1729,8 @@ public class Util {
             out.writeInt(length);
             out.write(buf,offset,length);
         }
-        else {
+        else
             out.write(0);
-        }
     }
 
     public static byte[] readByteBuffer(DataInput in) throws Exception {
@@ -1545,7 +1746,7 @@ public class Util {
 
 
     public static Buffer messageToByteBuffer(Message msg) throws Exception {
-        ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(512);
+        ByteArrayDataOutputStream out=new ByteArrayDataOutputStream((int)msg.size()+1);
 
         out.writeBoolean(msg != null);
         if(msg != null)
@@ -1634,8 +1835,8 @@ public class Util {
         else {
             //this isn't a superb metronome either, but allows a granularity
             //with a reasonable precision in the order of 50ths of millisecond
-            long initialTime=System.nanoTime() - 200;
-            while(System.nanoTime() < initialTime + nanos) ;
+            long initialTime=nanoTime() - 200;
+            while(nanoTime() < initialTime + nanos) ;
         }
     }
 
@@ -1649,14 +1850,174 @@ public class Util {
             return ret;
         }
         catch(IOException e) {
-            return 0;
+            return -1;
         }
     }
 
 
-    /** Returns a random value in the range [1 - range] */
+    public static long micros() {
+        return nanoTime() / 1000;
+    }
+
+    public static int factorial(int n) {
+        if(n == 1) return n;
+        return n * factorial(n-1);
+    }
+
+    /**
+     * Inefficient permutation of a generic list; uses too much copying among other things. PR welcome! :-)
+     * @param list The list
+     * @param permutations All permutations will be added to this list (as copies)
+     * @param <E> the type of the list elements
+     */
+    public static <E> void permute(List<E> list, List<List<E>> permutations) {
+        if(list.size() == 1) {
+            permutations.add(list);
+            return;
+        }
+        for(int i=0; i < list.size(); i++) {
+            permute(null, list, i, permutations);
+        }
+    }
+
+    protected static <E> void permute(List<E> prefix, List<E> list, int index, final List<List<E>> permutations) {
+        if(list.size() <= 1)
+            permutations.add(combine(prefix, list));
+        else {
+            List<E> swapped=swap(list, index);
+            List<E> first=car(swapped);
+            List<E> rest=cdr(swapped);
+            for(int i=0; i < rest.size(); i++)
+                permute(combine(prefix, first), rest, i, permutations);
+        }
+    }
+
+    public static <E> List<E> car(List<E> l) {
+        return l.isEmpty()? Collections.emptyList() : Collections.singletonList(l.get(0));
+    }
+
+    public static <E> List<E> cdr(List<E> l) {
+        return l.isEmpty()? Collections.emptyList() : l.subList(1, l.size());
+    }
+
+    public static <E> List<E> combine(List<E> l1, List<E> l2) {
+        ArrayList<E> retval=new ArrayList<>();
+        if(l1 != null)
+            retval.addAll(l1);
+        if(l2 != null)
+            retval.addAll(l2);
+        return retval;
+    }
+
+    // moves el at index to the front, returns a copy
+    protected static <E> List<E> swap(List<E> l, int index) {
+        List<E> swapped=new ArrayList<>();
+        E el=l.get(index);
+        swapped.add(el);
+        for(int i=0; i < l.size(); i++) {
+            el=l.get(i);
+            if(i != index)
+                swapped.add(el);
+        }
+        return swapped;
+    }
+
+
+    /**
+     * Performs an ordered permutation of the elements of a and b such that the order of elements in list a and b is
+     * preserved. Example: {A1,A2} and {B1,B2} -> {A1,B1,A2,B2} but not {A1,B2,B1,A2}
+     */
+    public static <E> Collection<List<E>> orderedPermutation(List<E> a, List<E> b) {
+        Collection<List<E>> perms=new LinkedHashSet<>();
+        for(int i=0; i <= a.size(); i++) {
+            for(int j=0; j <= b.size(); j++) {
+                if(i == 0 && j == 0)
+                    continue;
+                List<E> l1=new ArrayList<>(a), l2=new ArrayList<>(b);
+                List<E> perm=permute(l1, l2, i, j);
+                perms.add(perm);
+            }
+        }
+
+        for(int i=0; i <= b.size(); i++) {
+            for(int j=0; j <= a.size(); j++) {
+                if(i == 0 && j == 0)
+                    continue;
+                List<E> l1=new ArrayList<>(b), l2=new ArrayList<>(a);
+                List<E> perm=permute(l1, l2, i, j);
+                perms.add(perm);
+            }
+        }
+        return perms;
+    }
+
+    protected static <E> List<E> permute(List<E> l1, List<E> l2, int remove_from_l1, int remove_from_l2) {
+        List<E> retval=new ArrayList<>();
+        while(!(l1.isEmpty() || l2.isEmpty())) {
+            int a=remove_from_l1, b=remove_from_l2;
+            while(a-- > 0 && !l1.isEmpty())
+                retval.add(l1.remove(0));
+            while(b-- > 0 && !l2.isEmpty())
+                retval.add(l2.remove(0));
+        }
+        retval.addAll(l1);
+        retval.addAll(l2);
+        return retval;
+    }
+
+    @SafeVarargs
+    public static <E> boolean checkOrder(Collection<E> perm, List<E> ... lists) {
+        for(List<E> list: lists) {
+            if(!perm.containsAll(list))
+                return false;
+            int pos=0;
+            for(E el: list) {
+                int index=index(perm, el);
+                if(index < pos)
+                    return false;
+                pos=index;
+            }
+        }
+        return true;
+    }
+
+    protected static <E> int index(Collection<E> list, E el) {
+        int index=0;
+        for(E element: list) {
+            if(element.equals(el))
+                return index;
+            index++;
+        }
+        return -1;
+    }
+
+    /**
+     * Reorders elements of an array in-place. No bounds checking is performed. Null elements are shuffled, too
+     * @param array the array to be shuffled; the array will be modified
+     * @param from the start index inclusive
+     * @param to the end index (exclusive), must be >= from (not checked)
+     * @param <T> the type of the array's elements
+     */
+    public static <T> void shuffle(T[] array, int from, int to) {
+        if(array == null)
+            return;
+        for(int i=from; i < to; i++) {
+            int random=(int)random(to);
+            int other=random -1 + from;
+            // int other=(int)(random(to)-1 + from);
+            if(i != other) {
+                T tmp=array[i];
+                array[i]=array[other];
+                array[other]=tmp;
+            }
+        }
+    }
+
+
+    /** Returns a random value in the range [1 - range]. If range is 0, 1 will be returned. If range is negative, an
+     * exception will be thrown */
     public static long random(long range) {
-        return (long)((Math.random() * range) % range) + 1;
+        return range == 0? 1 : ThreadLocalRandom.current().nextLong(range) + 1;
     }
 
 
@@ -1741,71 +2102,6 @@ public class Util {
     }
 
 
-    /**
-     * Debugging method used to dump the content of a protocol queue in a
-     * condensed form. Useful to follow the evolution of the queue's content in
-     * time.
-     */
-    public static String dumpQueue(Queue q) {
-        StringBuilder sb=new StringBuilder();
-        Collection values=q.values();
-        if(values.isEmpty()) {
-            sb.append("empty");
-        }
-        else {
-            for(Object o : values) {
-                String s=null;
-                if(o instanceof Event) {
-                    Event event=(Event)o;
-                    int type=event.getType();
-                    s=Event.type2String(type);
-                    if(type == Event.VIEW_CHANGE)
-                        s+=" " + event.getArg();
-                    if(type == Event.MSG)
-                        s+=" " + event.getArg();
-
-                    if(type == Event.MSG) {
-                        s+="[";
-                        Message m=(Message)event.getArg();
-                        Map<Short,Header> headers=new HashMap<>(m.getHeaders());
-                        for(Map.Entry<Short,Header> entry : headers.entrySet()) {
-                            short id=entry.getKey();
-                            Header value=entry.getValue();
-                            String headerToString=null;
-                            if(value instanceof FD.FdHeader) {
-                                headerToString=value.toString();
-                            }
-                            else if(value instanceof PingHeader) {
-                                headerToString=ClassConfigurator.getProtocol(id) + "-";
-                                if(((PingHeader)value).type() == PingHeader.GET_MBRS_REQ) {
-                                    headerToString+="GMREQ";
-                                }
-                                else if(((PingHeader)value).type() == PingHeader.GET_MBRS_RSP) {
-                                    headerToString+="GMRSP";
-                                }
-                                else {
-                                    headerToString+="UNKNOWN";
-                                }
-                            }
-                            else {
-                                headerToString=ClassConfigurator.getProtocol(id) + "-" + (value == null? "null" : value.toString());
-                            }
-                            s+=headerToString;
-                            s+=" ";
-                        }
-                        s+="]";
-                    }
-                }
-                else {
-                    s=o.toString();
-                }
-                sb.append(s).append("\n");
-            }
-        }
-        return sb.toString();
-    }
-
-
     public static String mapToString(Map<? extends Object,? extends Object> map) {
         if(map == null)
             return "null";
@@ -1824,30 +2120,15 @@ public class Util {
     }
 
 
-    /**
-     * MByte nowadays doesn't mean 1024 * 1024 bytes, but 1 million bytes, see http://en.wikipedia.org/wiki/Megabyte
-     * @param bytes
-     * @return
-     */
-    public static String printBytes(long bytes) {
-        double tmp;
-
-        if(bytes < 1000)
-            return bytes + "b";
-        if(bytes < 1000000) {
-            tmp=bytes / 1000.0;
-            return f.format(tmp) + "KB";
-        }
-        if(bytes < 1000000000) {
-            tmp=bytes / 1000000.0;
-            return f.format(tmp) + "MB";
-        }
-        else {
-            tmp=bytes / 1000000000.0;
-            return f.format(tmp) + "GB";
-        }
+    public static String printNanos(long time_ns) {
+        double us=time_ns / 1_000.0;
+        return String.format("%d ns (%.2f us)", time_ns, us);
     }
 
+    public static String printNanos(double time_ns) {
+        double us=time_ns / 1_000.0;
+        return String.format("%.2f ns (%.2f us)", time_ns, us);
+    }
 
     public static String printTime(long time,TimeUnit unit) {
         long ns=TimeUnit.NANOSECONDS.convert(time,unit);
@@ -1891,34 +2172,58 @@ public class Util {
         else if((index=input.indexOf("kb")) != -1)
             factor=1000;
         else if((index=input.indexOf('m')) != -1)
-            factor=1000000;
+            factor=1_000_000;
         else if((index=input.indexOf("mb")) != -1)
-            factor=1000000;
+            factor=1_000_000;
         else if((index=input.indexOf('g')) != -1)
-            factor=1000000000;
+            factor=1_000_000_000;
         else if((index=input.indexOf("gb")) != -1)
-            factor=1000000000;
+            factor=1_000_000_000;
 
         String str=index != -1? input.substring(0,index) : input;
         return new Tuple<>(str,factor);
+    }
+
+    /**
+     * MByte nowadays doesn't mean 1024 * 1024 bytes, but 1 million bytes, see http://en.wikipedia.org/wiki/Megabyte
+     * @param bytes
+     * @return
+     */
+    public static String printBytes(long bytes) {
+        double tmp;
+
+        if(bytes < 1000)
+            return String.format("%db", bytes);
+        if(bytes < 1_000_000) {
+            tmp=bytes / 1000.0;
+            return String.format("%,.2fKB", tmp);
+        }
+        if(bytes < 1_000_000_000) {
+            tmp=bytes / 1_000_000.0;
+            return String.format("%,.2fMB", tmp);
+        }
+        else {
+            tmp=bytes / 1_000_000_000.0;
+            return String.format("%,.2fGB", tmp);
+        }
     }
 
     public static String printBytes(double bytes) {
         double tmp;
 
         if(bytes < 1000)
-            return bytes + "b";
-        if(bytes < 1000000) {
+            return String.format("%.2fb", bytes);
+        if(bytes < 1_000_000) {
             tmp=bytes / 1000.0;
-            return f.format(tmp) + "KB";
+            return String.format("%,.2fKB", tmp);
         }
-        if(bytes < 1000000000) {
-            tmp=bytes / 1000000.0;
-            return f.format(tmp) + "MB";
+        if(bytes < 1_000_000_000) {
+            tmp=bytes / 1000_000.0;
+            return String.format("%,.2fMB", tmp);
         }
         else {
-            tmp=bytes / 1000000000.0;
-            return f.format(tmp) + "GB";
+            tmp=bytes / 1_000_000_000.0;
+            return String.format("%,.2fGB", tmp);
         }
     }
 
@@ -1979,18 +2284,18 @@ public class Util {
      * @return List. A List<Range> of offset/length pairs
      */
     public static List<Range> computeFragOffsets(int offset,int length,int frag_size) {
-        List<Range> retval=new ArrayList<>();
+        int num_frags=(int)Math.ceil(length / (double)frag_size);
+        List<Range> retval=new ArrayList<>(num_frags);
         long total_size=(long)length + offset;
         int index=offset;
         int tmp_size=0;
-        Range r;
 
         while(index < total_size) {
             if(index + frag_size <= total_size)
                 tmp_size=frag_size;
             else
                 tmp_size=(int)(total_size - index);
-            r=new Range(index,tmp_size);
+            Range r=new Range(index,tmp_size);
             retval.add(r);
             index+=tmp_size;
         }
@@ -2137,29 +2442,6 @@ public class Util {
         if(old_list != null)
             retval.removeAll(old_list);
         return retval;
-    }
-
-
-    /**
-     * Selects a random subset of members according to subset_percentage and returns them.
-     * Picks no member twice from the same membership. If the percentage is smaller than 1 -> picks 1 member.
-     */
-    public static List<Address> pickSubset(List<Address> members,double subset_percentage) {
-        List<Address> ret=new ArrayList<>(), tmp_mbrs;
-        int num_mbrs=members.size(), subset_size, index;
-
-        if(num_mbrs == 0) return ret;
-        subset_size=(int)Math.ceil(num_mbrs * subset_percentage);
-
-        tmp_mbrs=new ArrayList<>(members);
-
-        for(int i=subset_size; i > 0 && !tmp_mbrs.isEmpty(); i--) {
-            index=(int)((Math.random() * num_mbrs) % tmp_mbrs.size());
-            ret.add(tmp_mbrs.get(index));
-            tmp_mbrs.remove(index);
-        }
-
-        return ret;
     }
 
 
@@ -2313,32 +2595,27 @@ public class Util {
     public static <T> T pickRandomElement(List<T> list) {
         if(list == null || list.isEmpty()) return null;
         int size=list.size();
-        int index=(int)((Math.random() * size * 10) % size);
+        int index=(int)Util.random(size)-1;
         return list.get(index);
     }
 
     public static <T> T pickRandomElement(T[] array) {
         if(array == null) return null;
         int size=array.length;
-        int index=(int)((Math.random() * size * 10) % size);
+        int index=(int)Util.random(size)-1;
         return array[index];
     }
 
-    /**
-     * Returns the object next to element in list
-     * @param list
-     * @param obj
-     * @param <T>
-     * @return
-     */
+
     public static <T> T pickNext(List<T> list,T obj) {
         if(list == null || obj == null)
             return null;
-        Object[] array=list.toArray();
-        for(int i=0; i < array.length; i++) {
-            T tmp=(T)array[i];
+        int size=list.size();
+
+        for(int i=0; i < size; i++) {
+            T tmp=list.get(i);
             if(Objects.equals(tmp, obj))
-                return (T)array[(i + 1) % array.length];
+                return list.get((i + 1) % size);
         }
         return null;
     }
@@ -2390,7 +2667,7 @@ public class Util {
 
     public static Address createRandomAddress(String name) {
         UUID retval=UUID.randomUUID();
-        UUID.add(retval,name);
+        NameCache.add(retval,name);
         return retval;
     }
 
@@ -2585,6 +2862,15 @@ public class Util {
     }
 
     public static Field getField(final Class clazz, String field_name) {
+        try {
+            return getField(clazz, field_name, false);
+        }
+        catch(NoSuchFieldException e) {
+            return null;
+        }
+    }
+
+    public static Field getField(final Class clazz, String field_name, boolean throw_exception) throws NoSuchFieldException {
         if(clazz == null || field_name == null)
             return null;
 
@@ -2596,6 +2882,8 @@ public class Util {
             catch(NoSuchFieldException e) {
             }
         }
+        if(field == null && throw_exception)
+            throw new NoSuchFieldException(String.format("%s not found in %s or superclasses", field_name, clazz.getName()));
         return field;
     }
 
@@ -3175,7 +3463,7 @@ public class Util {
                 if(start_port == end_port)
                     throw new BindException(String.format("no port available in range [%d .. %d] (bind_addr=%s)",
                                                           original_start_port, end_port, bind_addr));
-                if(bind_addr != null && !bind_addr.isLoopbackAddress()) {
+                if(bind_addr != null && !(bind_addr.isLoopbackAddress() || bind_addr.isAnyLocalAddress())) {
                     NetworkInterface nic=NetworkInterface.getByInetAddress(bind_addr);
                     if(nic == null)
                         throw new BindException("bind_addr " + bind_addr + " is not a valid interface: " + bind_ex);
@@ -3768,7 +4056,11 @@ public class Util {
             if(addr.equals(bind_addr))
                 return;
         }
-        throw new BindException("[" + prot_name + "] " + bind_addr + " is not a valid address on any local network interface");
+        StringBuilder sb=new StringBuilder();
+        if(prot_name != null)
+            sb.append('[').append(prot_name).append("] ");
+        sb.append(bind_addr).append(" is not a valid address on any local network interface");
+        throw new BindException(sb.toString());
     }
 
 
@@ -3866,41 +4158,28 @@ public class Util {
 
 
     /**
-     * Go through the input string and replace any occurance of ${p} with the
-     * props.getProperty(p) value. If there is no such property p defined, then
-     * the ${p} reference will remain unchanged.
+     * Go through the input string and replace any occurance of ${p} with the props.getProperty(p) value.
+     * If there is no such property p defined, then the ${p} reference will remain unchanged.
      * <p/>
      * If the property reference is of the form ${p:v} and there is no such
      * property p, then the default value v will be returned.
      * <p/>
-     * If the property reference is of the form ${p1,p2} or ${p1,p2:v} then the
-     * primary and the secondary properties will be tried in turn, before
-     * returning either the unchanged input, or the default value.
+     * If the property reference is of the form ${p1,p2} or ${p1,p2:v} then the primary and the secondary properties
+     * will be tried in turn, before returning either the unchanged input, or the default value.
      * <p/>
-     * The property ${/} is replaced with System.getProperty("file.separator")
-     * value and the property ${:} is replaced with
-     * System.getProperty("path.separator").
-     * @param string -
-     *               the string with possible ${} references
-     * @param props  -
-     *               the source for ${x} property ref values, null means use
+     * The property ${/} is replaced with System.getProperty("file.separator") value and the property ${:} is replaced
+     * with System.getProperty("path.separator").
+     * @param string the string with possible ${} references
+     * @param props  the source for ${x} property ref values, null means use
      *               System.getProperty()
      * @return the input string with all property references replaced if any. If
-     * there are no valid references the input string will be returned.
-     * @throws {@link java.security.AccessControlException}
-     *                when not authorised to retrieved system properties
+     *         there are no valid references the input string will be returned.
+     * @throws {@link java.security.AccessControlException} when not authorised to retrieved system properties
      */
     public static String replaceProperties(final String string,final Properties props) {
-        /** File separator value */
         final String FILE_SEPARATOR=File.separator;
-
-        /** Path separator value */
         final String PATH_SEPARATOR=File.pathSeparator;
-
-        /** File separator alias */
         final String FILE_SEPARATOR_ALIAS="/";
-
-        /** Path separator alias */
         final String PATH_SEPARATOR_ALIAS=":";
 
         // States used in property parsing
@@ -3916,12 +4195,17 @@ public class Util {
             char c=chars[i];
 
             // Dollar sign outside brackets
-            if(c == '$' && state != IN_BRACKET)
-                state=SEEN_DOLLAR;
+            if(c == '$' && state != IN_BRACKET) {
+
+                // check for escape char '\':
+                if(i > 0 && chars[i-1] != '\\')
+                    state=SEEN_DOLLAR;
+            }
 
                 // Open bracket immediatley after dollar
             else if(c == '{' && state == SEEN_DOLLAR) {
-                buffer.append(string.substring(start,i - 1));
+                // buffer.append(string.substring(start,i - 1));
+                append(buffer, string.substring(start,i - 1));
                 state=IN_BRACKET;
                 start=i - 1;
             }
@@ -3993,16 +4277,24 @@ public class Util {
         }
 
         // No properties
-        if(!properties)
-            return string;
+       // if(!properties)
+         //   return string;
 
         // Collect the trailing characters
-        if(start != chars.length)
-            buffer.append(string.substring(start,chars.length));
+        if(start != chars.length) {
+            // buffer.append(string.substring(start,chars.length));
+            append(buffer, string.substring(start, chars.length));
+        }
 
-        // Done
         return buffer.toString();
     }
+
+    protected static void append(StringBuilder sb, String str) {
+        if(sb == null || str == null)
+            return;
+        sb.append(str.replace("\\${", "${"));
+    }
+
 
     /**
      * Try to resolve a "key" from the provided properties by checking if it is
@@ -4140,6 +4432,8 @@ public class Util {
             try {
                 retval=System.getProperty(prop);
                 if(retval != null)
+                    return retval;
+                if((retval=System.getenv(prop)) != null)
                     return retval;
             }
             catch(Throwable e) {

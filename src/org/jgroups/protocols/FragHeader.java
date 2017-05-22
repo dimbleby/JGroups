@@ -5,6 +5,7 @@ import org.jgroups.util.Bits;
 
 import java.io.DataInput;
 import java.io.DataOutput;
+import java.util.function.Supplier;
 
 
 /**
@@ -25,6 +26,12 @@ public class FragHeader extends Header {
         this.num_frags=num_frags;
     }
 
+    public short getMagicId() {return 52;}
+
+    public Supplier<? extends Header> create() {
+        return FragHeader::new;
+    }
+
     public String toString() {
         return "[id=" + id + ", frag_id=" + frag_id + ", num_frags=" + num_frags + ']';
     }
@@ -36,7 +43,7 @@ public class FragHeader extends Header {
         Bits.writeInt(num_frags, out);
     }
 
-    public int size() {
+    public int serializedSize() {
         return Bits.size(id) + Bits.size(frag_id) + Bits.size(num_frags);
     }
 

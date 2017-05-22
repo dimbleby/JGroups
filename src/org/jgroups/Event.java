@@ -1,5 +1,6 @@
 package org.jgroups;
 
+
 /**
  * Event is a JGroups internal class used for inter-stack and intra-stack communication. 
  * 
@@ -7,7 +8,6 @@ package org.jgroups;
  * @author Bela Ban
  */
 public class Event {
-    public static final int MSG                                =  1;  // arg = Message
     public static final int CONNECT                            =  2;  // arg = cluster name (string)
     public static final int DISCONNECT                         =  4;  // arg = member address (Address)
     public static final int VIEW_CHANGE                        =  6;  // arg = View (or MergeView in case of merge)
@@ -43,7 +43,7 @@ public class Event {
     public static final int CONNECT_WITH_STATE_TRANSFER        = 80;  // arg = cluster name (string)
     public static final int GET_PHYSICAL_ADDRESS               = 87;  // arg = Address --> PhysicalAddress
     public static final int GET_LOGICAL_PHYSICAL_MAPPINGS      = 88;  // arg = boolean --> Map<Address,PhysicalAddress>
-    public static final int SET_PHYSICAL_ADDRESS               = 89;  // arg = Tuple<Address,PhysicalAddress> --> boolean
+    public static final int ADD_PHYSICAL_ADDRESS               = 89;  // arg = Tuple<Address,PhysicalAddress> --> boolean
     public static final int REMOVE_ADDRESS                     = 90;  // arg = Address
     public static final int GET_LOCAL_ADDRESS                  = 91;  // arg = null --> UUID (local_addr)
     public static final int CONNECT_USE_FLUSH			       = 92;
@@ -88,20 +88,15 @@ public class Event {
         this.arg=arg;
     }
 
-    public final int getType() {
-        return type;
-    }
-
-
-    public Object getArg() {
-        return arg;
-    }
+    public int                  type()    {return type;}
+    public int                  getType() {return type;}
+    public <T extends Object> T arg()     {return (T)arg;}
+    public <T extends Object> T getArg()  {return (T)arg;}
 
 
 
     public static String type2String(int t) {
         switch(t) {
-            case MSG:	                 return "MSG";
             case CONNECT:	             return "CONNECT";
             case DISCONNECT:	         return "DISCONNECT";
             case VIEW_CHANGE:	         return "VIEW_CHANGE";
@@ -138,7 +133,7 @@ public class Event {
             case CONNECT_WITH_STATE_TRANSFER:    return "CONNECT_WITH_STATE_TRANSFER";
             case GET_PHYSICAL_ADDRESS:   return "GET_PHYSICAL_ADDRESS";
             case GET_LOGICAL_PHYSICAL_MAPPINGS: return "GET_LOGICAL_PHYSICAL_MAPPINGS";
-            case SET_PHYSICAL_ADDRESS:   return "SET_PHYSICAL_ADDRESS";
+            case ADD_PHYSICAL_ADDRESS:   return "ADD_PHYSICAL_ADDRESS";
             case REMOVE_ADDRESS:         return "REMOVE_ADDRESS";
             case GET_LOCAL_ADDRESS:      return "GET_LOCAL_ADDRESS";
             case CONNECT_USE_FLUSH: return "CONNECT_USE_FLUSH";
@@ -166,8 +161,6 @@ public class Event {
     public String toString() {
         StringBuilder ret=new StringBuilder(64);
         ret.append(type2String(type)).append(", arg=").append(arg);
-        if(type == MSG)
-            ret.append(" (headers=").append(((Message)arg).printHeaders()).append(")");
         return ret.toString();
     }
 

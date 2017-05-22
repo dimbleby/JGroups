@@ -56,7 +56,7 @@ public class SequencerOrderTest {
         r3=new MyReceiver("C");
         c.setReceiver(r3);
 
-        Util.waitUntilAllChannelsHaveSameSize(10000, 1000,a,b,c);
+        Util.waitUntilAllChannelsHaveSameView(10000, 1000, a, b, c);
 
         for(int i=0; i < senders.length; i++)
             senders[i]=new Sender(NUM_MSGS, num,a,b,c);
@@ -103,14 +103,14 @@ public class SequencerOrderTest {
             shuffle.setUp(true);
             shuffle.setMaxSize(10);
             shuffle.setMaxTime(1000);
-            ch.getProtocolStack().insertProtocol(shuffle, ProtocolStack.BELOW, NAKACK2.class);
+            ch.getProtocolStack().insertProtocol(shuffle, ProtocolStack.Position.BELOW, NAKACK2.class);
             shuffle.init(); // starts the timer
         }
     }
 
     protected static void removeSHUFFLE(JChannel ... channels) {
         for(JChannel ch: channels) {
-            SHUFFLE shuffle=(SHUFFLE)ch.getProtocolStack().removeProtocol(SHUFFLE.class);
+            SHUFFLE shuffle=ch.getProtocolStack().removeProtocol(SHUFFLE.class);
             if(shuffle != null)
                 shuffle.destroy();
         }

@@ -9,6 +9,7 @@ import org.jgroups.util.Util;
 
 import java.io.DataInput;
 import java.io.DataOutput;
+import java.util.function.Supplier;
 
 
 /**
@@ -28,7 +29,10 @@ public class NakAckHeader2 extends Header {
 
     public NakAckHeader2() {
     }
-
+    public short getMagicId() {return 78;}
+    @Override public Supplier<? extends Header> create() {
+        return NakAckHeader2::new;
+    }
 
     public static NakAckHeader2 createMessageHeader(long seqno) {
         return new NakAckHeader2(MSG, seqno);
@@ -96,7 +100,7 @@ public class NakAckHeader2 extends Header {
     }
     
 
-    public int size() {
+    public int serializedSize() {
         int retval=Global.BYTE_SIZE; // type
         switch(type) {
             case MSG:

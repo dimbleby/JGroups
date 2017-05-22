@@ -57,10 +57,6 @@ public class ClientGmsImpl extends GmsImpl {
      * Otherwise, we continue trying to send join() messages to the coordinator,
      * until we succeed (or there is no member in the group. In this case, we
      * create our own singleton group).
-     * <p>
-     * When GMS.disable_initial_coord is set to true, then we won't become
-     * coordinator on receiving an initial membership of 0, but instead will
-     * retry (forever) until we get an initial membership of > 0.
      *
      * @param mbr Our own address (assigned through SET_LOCAL_ADDRESS)
      */
@@ -238,17 +234,16 @@ public class ClientGmsImpl extends GmsImpl {
     }
 
     void sendJoinMessage(Address coord, Address mbr,boolean joinWithTransfer, boolean useFlushIfPresent) {
-        Message msg=new Message(coord).setFlag(Message.Flag.OOB, Message.Flag.INTERNAL);
-        GMS.GmsHeader hdr=joinWithTransfer? new GMS.GmsHeader(GMS.GmsHeader.JOIN_REQ_WITH_STATE_TRANSFER, mbr,useFlushIfPresent)
-          : new GMS.GmsHeader(GMS.GmsHeader.JOIN_REQ, mbr,useFlushIfPresent);
-        msg.putHeader(gms.getId(), hdr);
-        gms.getDownProtocol().down(new Event(Event.MSG, msg));
+        byte type=joinWithTransfer? GMS.GmsHeader.JOIN_REQ_WITH_STATE_TRANSFER : GMS.GmsHeader.JOIN_REQ;
+        GMS.GmsHeader hdr=new GMS.GmsHeader(type, mbr, useFlushIfPresent);
+        Message msg=new Message(coord).setFlag(Message.Flag.OOB, Message.Flag.INTERNAL).putHeader(gms.getId(), hdr);
+        gms.getDownProtocol().down(msg);
     }
 
     void sendViewAck(Address coord) {
         Message view_ack=new Message(coord).setFlag(Message.Flag.OOB, Message.Flag.INTERNAL)
           .putHeader(gms.getId(), new GMS.GmsHeader(GMS.GmsHeader.VIEW_ACK));
-        gms.getDownProtocol().down(new Event(Event.MSG, view_ack)); // send VIEW_ACK to sender of view
+        gms.getDownProtocol().down(view_ack); // send VIEW_ACK to sender of view
     }
 
     /** Returns all members whose PingData is flagged as coordinator */

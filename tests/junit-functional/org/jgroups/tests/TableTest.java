@@ -2,11 +2,7 @@ package org.jgroups.tests;
 
 import org.jgroups.Global;
 import org.jgroups.Message;
-import org.jgroups.util.SeqnoList;
-import org.jgroups.util.Table;
-import org.jgroups.util.Tuple;
-import org.jgroups.util.Util;
-import org.testng.annotations.DataProvider;
+import org.jgroups.util.*;
 import org.testng.annotations.Test;
 
 import java.util.ArrayList;
@@ -14,26 +10,20 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BiConsumer;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
 /** Tests {@link org.jgroups.util.Table<Integer>}
  * @author Bela Ban
  */
-@Test(groups=Global.FUNCTIONAL,sequential=false)
+@Test(groups=Global.FUNCTIONAL)
 public class TableTest {
 
     protected static final Predicate<Message> dont_loopback_filter=msg -> msg != null && msg.isTransientFlagSet(Message.TransientFlag.DONT_LOOPBACK);
 
-    @DataProvider(name="rangeProvider")
-    protected static final Object[][] rangeProvider() {
-        return new Object[][]{
-          {Long.MAX_VALUE - 10, 20},
-          {-10, 20}
-        };
-    }
-    
+
     public static void testCreation() {
         Table<Integer> table=new Table<>(3, 10, 0);
         System.out.println("table = " + table);
@@ -53,7 +43,7 @@ public class TableTest {
 
     public void testAddList() {
         Table<Integer> buf=new Table<>(3, 10, 0);
-        List<Tuple<Long,Integer>> msgs=createList(1,2);
+        List<LongTuple<Integer>> msgs=createList(1, 2);
         boolean rc=buf.add(msgs);
         System.out.println("buf = " + buf);
         assert rc;
@@ -62,13 +52,13 @@ public class TableTest {
 
     public void testAddListWithConstValue() {
         Table<Integer> buf=new Table<>(3, 10, 0);
-        List<Tuple<Long,Integer>> msgs=createList(1,2,3,4,5,6,7,8,9,10);
+        List<LongTuple<Integer>> msgs=createList(1,2,3,4,5,6,7,8,9,10);
         final Integer DUMMY=0;
         boolean rc=buf.add(msgs, false, DUMMY);
         System.out.println("buf = " + buf);
         assert rc;
         assert buf.size() == 10;
-        List<Integer> list=buf.removeMany(null, true, 0, element -> element.hashCode() == DUMMY.hashCode());
+        List<Integer> list=buf.removeMany(true, 0, element -> element.hashCode() == DUMMY.hashCode());
         System.out.println("list = " + list);
         assert list.size() == 10;
         for(int num: list)
@@ -77,7 +67,7 @@ public class TableTest {
 
     public void testAddListWithRemoval() {
         Table<Integer> buf=new Table<>(3, 10, 0);
-        List<Tuple<Long,Integer>> msgs=createList(1,2,3,4,5,6,7,8,9,10);
+        List<LongTuple<Integer>> msgs=createList(1,2,3,4,5,6,7,8,9,10);
         int size=msgs.size();
         boolean added=buf.add(msgs);
         System.out.println("buf = " + buf);
@@ -115,7 +105,7 @@ public class TableTest {
 
     public static void testAdditionList() {
         Table<Integer> table=new Table<>(3, 10, 0);
-        List<Tuple<Long,Integer>> msgs=createList(0);
+        List<LongTuple<Integer>> msgs=createList(0);
         assert !table.add(msgs);
         long[] seqnos={1,5,9,10,11,19,20,29};
         msgs=createList(seqnos);
@@ -144,7 +134,7 @@ public class TableTest {
     public void testAdditionListWithOffset() {
         Table<Integer> table=new Table<>(3, 10, 100);
         long seqnos[]={101,105,109,110,111,119,120,129};
-        List<Tuple<Long,Integer>> msgs=createList(seqnos);
+        List<LongTuple<Integer>> msgs=createList(seqnos);
         System.out.println("table: " + table.dump());
         assert table.add(msgs);
         assert table.size() == 8;
@@ -157,9 +147,9 @@ public class TableTest {
 
     public static void testAddListWithResizing() {
         Table<Integer> table=new Table<>(3, 5, 0);
-        List<Tuple<Long,Integer>> msgs=new ArrayList<>();
+        List<LongTuple<Integer>> msgs=new ArrayList<>();
         for(int i=1; i < 100; i++)
-            msgs.add(new Tuple<>((long)i,i));
+            msgs.add(new LongTuple<>((long)i,i));
         table.add(msgs, false);
         System.out.println("table = " + table);
         int num_resizes=table.getNumResizes();
@@ -170,9 +160,9 @@ public class TableTest {
     public static void testAddListWithResizingNegativeSeqnos() {
         long seqno=Long.MAX_VALUE-50;
         Table<Integer> table=new Table<>(3, 5, seqno);
-        List<Tuple<Long,Integer>> msgs=new ArrayList<>();
+        List<LongTuple<Integer>> msgs=new ArrayList<>();
         for(int i=1; i < 100; i++)
-            msgs.add(new Tuple<>((long)i+seqno,i));
+            msgs.add(new LongTuple<>((long)i+seqno,i));
         table.add(msgs, false);
         System.out.println("table = " + table);
         int num_resizes=table.getNumResizes();
@@ -182,9 +172,9 @@ public class TableTest {
 
     public static void testAddListWithResizing2() {
         Table<Integer> table=new Table<>(3, 500, 0);
-        List<Tuple<Long,Integer>> msgs=new ArrayList<>();
+        List<LongTuple<Integer>> msgs=new ArrayList<>();
         for(int i=1; i < 100; i++)
-            msgs.add(new Tuple<>((long)i,i));
+            msgs.add(new LongTuple<>((long)i,i));
         table.add(msgs, false);
         System.out.println("table = " + table);
         int num_resizes=table.getNumResizes();
@@ -490,7 +480,7 @@ public class TableTest {
     }
 
 
-    public static void testComputeSize() {
+    public void testComputeSize() {
         Table<Integer> table=new Table<>(3, 10, 0);
         for(int num: Arrays.asList(1,2,3,4,5,6,7,8,9,10))
             table.add(num, num);
@@ -664,7 +654,7 @@ public class TableTest {
         Table<Integer> table=new Table<>(3, 10, 0);
         for(int i=1; i <= 10; i++)
             table.add(i, i);
-        List<Integer> list=table.removeMany(null, true, 0, element -> element % 2 == 0);
+        List<Integer> list=table.removeMany(true, 0, element -> element % 2 == 0);
         System.out.println("list = " + list);
         System.out.println("table = " + table);
         assert list.size() == 5;
@@ -677,7 +667,7 @@ public class TableTest {
         Table<Integer> table=new Table<>(3, 10, 0);
         for(int i=1; i <= 10; i++)
             table.add(i, i);
-        List<Integer> list=table.removeMany(null, true, 0, element -> true);
+        List<Integer> list=table.removeMany(true, 0, element -> true);
         System.out.println("list = " + list);
         System.out.println("table = " + table);
         assert list.size() == 10;
@@ -688,7 +678,7 @@ public class TableTest {
         Table<Integer> table=new Table<>(3, 10, 0);
         for(int i=1; i <= 10; i++)
             table.add(i, i);
-        List<Integer> list=table.removeMany(null, true, 0, element -> false);
+        List<Integer> list=table.removeMany(true, 0, element -> false);
         System.out.println("list = " + list);
         System.out.println("table = " + table);
         assert list == null;
@@ -699,13 +689,53 @@ public class TableTest {
         Table<Integer> table=new Table<>(3, 10, 0);
         for(int i=1; i <= 10; i++)
             table.add(i, i);
-        List<Integer> list=table.removeMany(null,true,3,new Predicate<Integer>() {
+        List<Integer> list=table.removeMany(true, 3, new Predicate<Integer>() {
             int cnt=0;
             public boolean test(Integer element) {return ++cnt <= 2;}});
         System.out.println("list = " + list);
         System.out.println("table = " + table);
         assert list.size() == 2;
         assert table.isEmpty();
+    }
+
+
+    public void testRemoveMany3() {
+        Table<Integer> table=new Table<>(3, 10, 0);
+        for(int i=1; i <= 10; i++)
+            table.add(i, i);
+
+        List<Integer> result=table.removeMany(true, 0, null, ArrayList::new, ArrayList::add);
+        assert result != null && result.size() == 10;
+        assert table.isEmpty();
+    }
+
+    public void testRemoveManyIntoMessageBatch() {
+        Table<Message> table=new Table<>(3, 10, 0);
+        for(int i=1; i <= 10; i++)
+            table.add(i, new Message(null, "hello"));
+
+        MessageBatch batch=new MessageBatch(table.size());
+        Supplier<MessageBatch> batch_creator=() -> batch;
+        BiConsumer<MessageBatch,Message> accumulator=MessageBatch::add;
+
+        MessageBatch result=table.removeMany(true, 0, null, batch_creator, accumulator);
+        assert !batch.isEmpty();
+        assert table.isEmpty();
+        assert batch.size() == 10;
+        assert result != null && result == batch;
+
+        IntStream.rangeClosed(11,15).forEach(seqno -> table.add(seqno, new Message(null, "test")));
+
+        batch.reset();
+        result=table.removeMany(true, 0, null, batch_creator, accumulator);
+        assert !batch.isEmpty();
+        assert table.isEmpty();
+        assert batch.size() == 5;
+        assert result != null && result == batch;
+
+
+        result=table.removeMany( true, 0, null, batch_creator, accumulator);
+        assert result == null;
     }
 
 
@@ -957,50 +987,62 @@ public class TableTest {
         Table<Integer> table=new Table<>(3, 10, 0);
         System.out.println("table = " + table);
         long highest_deliverable=table.getHighestDeliverable(), hd=table.getHighestDelivered();
+        int num_deliverable=table.getNumDeliverable();
         System.out.println("highest delivered=" + hd + ", highest deliverable=" + highest_deliverable);
         assert hd == 0;
         assert highest_deliverable == 0;
+        assert num_deliverable == 0;
 
         for(int num: Arrays.asList(1,2,3,4,5,6,8))
             table.add(num, num);
         System.out.println("table = " + table);
         highest_deliverable=table.getHighestDeliverable();
+        num_deliverable=table.getNumDeliverable();
         hd=table.getHighestDelivered();
         System.out.println("highest delivered=" + hd + ", highest deliverable=" + highest_deliverable);
         assert hd == 0;
         assert highest_deliverable == 6;
+        assert num_deliverable == 6;
 
         table.removeMany(true, 4);
         System.out.println("table = " + table);
         highest_deliverable=table.getHighestDeliverable();
+        num_deliverable=table.getNumDeliverable();
         hd=table.getHighestDelivered();
         System.out.println("highest delivered=" + hd + ", highest deliverable=" + highest_deliverable);
         assert hd == 4;
         assert highest_deliverable == 6;
+        assert num_deliverable == 2;
 
         table.removeMany(true, 100);
         System.out.println("table = " + table);
         highest_deliverable=table.getHighestDeliverable();
         hd=table.getHighestDelivered();
+        num_deliverable=table.getNumDeliverable();
         System.out.println("highest delivered=" + hd + ", highest deliverable=" + highest_deliverable);
         assert hd == 6;
         assert highest_deliverable == 6;
+        assert num_deliverable == 0;
 
         table.add(7,7);
         System.out.println("table = " + table);
         highest_deliverable=table.getHighestDeliverable();
+        num_deliverable=table.getNumDeliverable();
         hd=table.getHighestDelivered();
         System.out.println("highest delivered=" + hd + ", highest deliverable=" + highest_deliverable);
         assert hd == 6;
         assert highest_deliverable == 8;
+        assert num_deliverable == 2;
 
         table.removeMany(true, 100);
         System.out.println("table = " + table);
         highest_deliverable=table.getHighestDeliverable();
+        num_deliverable=table.getNumDeliverable();
         hd=table.getHighestDelivered();
         System.out.println("highest delivered=" + hd + ", highest deliverable=" + highest_deliverable);
         assert hd == 8;
         assert highest_deliverable == 8;
+        assert num_deliverable == 0;
     }
 
     public void testGetHighestDeliverable2() {
@@ -1382,8 +1424,14 @@ public class TableTest {
 
 
 
-    @Test(groups=Global.FUNCTIONAL,dataProvider="rangeProvider")
-    public void testSeqnoOverflow(long seqno, final int delta) {
+    @Test(groups=Global.FUNCTIONAL)
+    public void testSeqnoOverflow() {
+        _testSeqnoOverflow(Long.MAX_VALUE - 10, 20);
+        _testSeqnoOverflow(-10, 20);
+    }
+
+
+    protected void _testSeqnoOverflow(long seqno, final int delta) {
         long orig_seqno=seqno;
         Table<Message> win=new Table<>(3, 10, seqno);
 
@@ -1395,8 +1443,7 @@ public class TableTest {
         assert win.size() == delta;
         assertIndices(win, orig_seqno, orig_seqno, seqno);
 
-        final AtomicBoolean processing=new AtomicBoolean(false);
-        List<Message> msgs=win.removeMany(processing, true, 200);
+        List<Message> msgs=win.removeMany(true, 200, null);
         System.out.printf("removed %d msgs\n", msgs.size());
         assert win.isEmpty();
         assertIndices(win, seqno, seqno, seqno);
@@ -1428,12 +1475,12 @@ public class TableTest {
         }
     }
 
-    protected static List<Tuple<Long,Integer>> createList(long ... seqnos) {
+    protected static List<LongTuple<Integer>> createList(long ... seqnos) {
         if(seqnos == null)
             return null;
-        List<Tuple<Long,Integer>> msgs=new ArrayList<>(seqnos.length);
+        List<LongTuple<Integer>> msgs=new ArrayList<>(seqnos.length);
         for(long seqno: seqnos)
-            msgs.add(new Tuple<>(seqno, (int)seqno));
+            msgs.add(new LongTuple<>(seqno, (int)seqno));
         return msgs;
     }
 

@@ -18,6 +18,7 @@ import org.testng.annotations.Test;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * @author Bela Ban
@@ -135,7 +136,7 @@ public class MessageTest {
 
 
     public static void testBufferSize() throws Exception {
-        Message m1=new Message(null, null, "bela");
+        Message m1=new Message(null, "bela");
         assert m1.getRawBuffer() != null;
         assert m1.getBuffer() != null;
         Assert.assertEquals(m1.getBuffer().length, m1.getLength());
@@ -150,8 +151,8 @@ public class MessageTest {
 
     public static void testBufferOffset() throws Exception {
         byte[] buf={'b', 'e', 'l', 'a', 'b', 'a', 'n'};
-        Message m1=new Message(null, null, buf, 0, 4);
-        Message m2=new Message(null, null, buf, 4, 3);
+        Message m1=new Message(null, buf, 0, 4);
+        Message m2=new Message(null, buf, 4, 3);
 
         byte[] b1, b2;
 
@@ -183,22 +184,22 @@ public class MessageTest {
     @Test(groups=Global.FUNCTIONAL, expectedExceptions=ArrayIndexOutOfBoundsException.class)
     public static void testInvalidOffset() {
         byte[] buf={'b', 'e', 'l', 'a', 'b', 'a', 'n'};
-        Message m1=new Message(null, null, buf, -1, 4);
+        Message m1=new Message(null, buf, -1, 4);
         System.out.println("message is " + m1);
     }
 
     @Test(groups=Global.FUNCTIONAL, expectedExceptions=ArrayIndexOutOfBoundsException.class)
     public static void testInvalidLength() {
         byte[] buf={'b', 'e', 'l', 'a', 'b', 'a', 'n'};
-        Message m1=new Message(null, null, buf, 3, 6);
+        Message m1=new Message(null, buf, 3, 6);
         System.out.println("we should not get here with " + m1);
     }
 
 
     public static void testGetRawBuffer() {
         byte[] buf={'b', 'e', 'l', 'a', 'b', 'a', 'n'};
-        Message m1=new Message(null, null, buf, 0, 4);
-        Message m2=new Message(null, null, buf, 4, 3);
+        Message m1=new Message(null, buf, 0, 4);
+        Message m2=new Message(null, buf, 4, 3);
 
         Assert.assertEquals(buf.length, m1.getRawBuffer().length);
         Assert.assertEquals(4, m1.getBuffer().length);
@@ -213,16 +214,16 @@ public class MessageTest {
 
     public static void testSetObject() {
         String s1="Bela Ban";
-        Message m1=new Message(null, null, s1);
+        Message m1=new Message(null, s1);
         Assert.assertEquals(0, m1.getOffset());
         Assert.assertEquals(m1.getBuffer().length, m1.getLength());
-        String s2=(String)m1.getObject();
+        String s2=m1.getObject();
         Assert.assertEquals(s2, s1);
     }
 
 
     public static void testCopy() {
-        Message m1=new Message(null, null, "Bela Ban");
+        Message m1=new Message(null, "Bela Ban");
         m1.setFlag(Message.Flag.OOB);
         m1.setTransientFlag(Message.TransientFlag.OOB_DELIVERED);
         Message m2=m1.copy();
@@ -236,8 +237,8 @@ public class MessageTest {
 
     public static void testCopyWithOffset() {
         byte[] buf={'b', 'e', 'l', 'a', 'b', 'a', 'n'};
-        Message m1=new Message(null, null, buf, 0, 4);
-        Message m2=new Message(null, null, buf, 4, 3);
+        Message m1=new Message(null, buf, 0, 4);
+        Message m2=new Message(null, buf, 4, 3);
 
         Message m3, m4;
         m3=m1.copy();
@@ -253,7 +254,7 @@ public class MessageTest {
     }
 
     public static void testCopyHeaders() {
-        Message m1=new Message(null, null, "hello");
+        Message m1=new Message(null, "hello");
         for(short id: new short[]{1, 2, 10, Global.BLOCKS_START_ID, Global.BLOCKS_START_ID +10}) {
             m1.putHeader(id, new DummyHeader(id));
         }
@@ -270,82 +271,78 @@ public class MessageTest {
     }
 
 
-    public static void testComputeFragOffsets() {
-        Range r;
+    public void testComputeFragOffsets() {
         byte[] buf={0,1,2,3,4,5,6,7,8,9};
-        java.util.List retval=Util.computeFragOffsets(buf, 4);
+        java.util.List<Range> retval=Util.computeFragOffsets(buf, 4);
         System.out.println("list is " + retval);
         Assert.assertEquals(3, retval.size());
-        r=(Range)retval.get(0);
+        Range r=retval.get(0);
         Assert.assertEquals(0, r.low);
         Assert.assertEquals(4, r.high);
 
-        r=(Range)retval.get(1);
+        r=retval.get(1);
         Assert.assertEquals(4, r.low);
         Assert.assertEquals(4, r.high);
 
-        r=(Range)retval.get(2);
+        r=retval.get(2);
         Assert.assertEquals(8, r.low);
         Assert.assertEquals(2, r.high);
     }
 
 
 
-    public static void testComputeFragOffsetsWithOffsets() {
+    public void testComputeFragOffsetsWithOffsets() {
         Range r;
         // byte[] buf={'p', 'a', 'd', 0,1,2,3,4,5,6,7,8,9, 'p', 'a', 'd', 'd', 'i', 'e'};
-        java.util.List retval=Util.computeFragOffsets(3, 10, 4);
+        java.util.List<Range> retval=Util.computeFragOffsets(3, 10, 4);
         System.out.println("list is " + retval);
         Assert.assertEquals(3, retval.size());
-        r=(Range)retval.get(0);
+        r=retval.get(0);
         Assert.assertEquals(3, r.low);
         Assert.assertEquals(4, r.high);
 
-        r=(Range)retval.get(1);
+        r=retval.get(1);
         Assert.assertEquals(7, r.low);
         Assert.assertEquals(4, r.high);
 
-        r=(Range)retval.get(2);
+        r=retval.get(2);
         Assert.assertEquals(11, r.low);
         Assert.assertEquals(2, r.high);
     }
 
 
-    public static void testComputeFragOffsets2() {
-        Range r;
+    public void testComputeFragOffsets2() {
         byte[] buf={0,1,2,3,4,5,6,7,8,9};
-        java.util.List retval=Util.computeFragOffsets(buf, 10);
+        java.util.List<Range> retval=Util.computeFragOffsets(buf, 10);
         System.out.println("list is " + retval);
         Assert.assertEquals(1, retval.size());
-        r=(Range)retval.get(0);
+        Range r=retval.get(0);
         Assert.assertEquals(0, r.low);
         Assert.assertEquals(10, r.high);
     }
 
 
-    public static void testComputeFragOffsets3() {
-        Range r;
+    public void testComputeFragOffsets3() {
         byte[] buf={0,1,2,3,4,5,6,7,8,9};
-        java.util.List retval=Util.computeFragOffsets(buf, 100);
+        java.util.List<Range> retval=Util.computeFragOffsets(buf, 100);
         System.out.println("list is " + retval);
         Assert.assertEquals(1, retval.size());
-        r=(Range)retval.get(0);
+        Range r=retval.get(0);
         Assert.assertEquals(0, r.low);
         Assert.assertEquals(10, r.high);
     }
 
 
-    public static void testComputeFragOffsets4() {
-        Range r;
+    public void testComputeFragOffsets4() {
         byte[] buf={0,1,2,3,4,5,6,7,8,9};
-        java.util.List retval=Util.computeFragOffsets(buf, 5);
+        java.util.List<Range> retval=Util.computeFragOffsets(buf, 5);
         System.out.println("list is " + retval);
         Assert.assertEquals(2, retval.size());
-        r=(Range)retval.get(0);
+        Range r=retval.get(0);
         Assert.assertEquals(0, r.low);
         Assert.assertEquals(5, r.high);
 
-        r=(Range)retval.get(1);
+        r=retval.get(1);
         Assert.assertEquals(5, r.low);
         Assert.assertEquals(5, r.high);
     }
@@ -359,26 +356,26 @@ public class MessageTest {
 
 
     public static void testSizeMessageWithDest() throws Exception {
-        Message msg=new Message(UUID.randomUUID(), null, null);
+        Message msg=new Message(UUID.randomUUID());
         _testSize(msg);
     }
 
 
     public static void testSizeMessageWithSrc() throws Exception {
-        Message msg=new Message(null, UUID.randomUUID(), null);
+        Message msg=new Message(null).src(UUID.randomUUID());
         _testSize(msg);
     }
 
 
     public static void testSizeMessageWithDestAndSrc() throws Exception {
-        Message msg=new Message(UUID.randomUUID(), UUID.randomUUID(), null);
+        Message msg=new Message(UUID.randomUUID()).src(UUID.randomUUID());
         _testSize(msg);
     }
 
 
 
     public static void testSizeMessageWithDestAndSrcAndFlags() throws Exception {
-        Message msg=new Message(UUID.randomUUID(), UUID.randomUUID(), null);
+        Message msg=new Message(UUID.randomUUID()).src(UUID.randomUUID());
         msg.setFlag(Message.Flag.OOB);
         msg.setFlag(Message.Flag.DONT_BUNDLE);
         _testSize(msg);
@@ -386,31 +383,31 @@ public class MessageTest {
 
 
     public static void testSizeMessageWithBuffer() throws Exception {
-        Message msg=new Message(null, null, "bela".getBytes());
+        Message msg=new Message(null, "bela".getBytes());
         _testSize(msg);
     }
 
 
     public static void testSizeMessageWithBuffer2() throws Exception {
-        Message msg=new Message(null, null, new byte[]{'b', 'e', 'l', 'a'});
+        Message msg=new Message(null, new byte[]{'b', 'e', 'l', 'a'});
         _testSize(msg);
     }
 
 
     public static void testSizeMessageWithBuffer3() throws Exception {
-        Message msg=new Message(null, null, "bela");
+        Message msg=new Message(null, "bela");
         _testSize(msg);
     }
 
 
     public void testSizeMessageWithDestAndSrcAndHeaders() throws Exception {
-        Message msg=new Message(UUID.randomUUID(), UUID.randomUUID(), "bela".getBytes());
+        Message msg=new Message(UUID.randomUUID(), "bela".getBytes()).src(UUID.randomUUID());
         addHeaders(msg);
         _testSize(msg);
     }
 
-    public static void testReadFromSkipPayload() throws Exception {
-        Message msg=new Message(Util.createRandomAddress("A"), Util.createRandomAddress("B"), "bela".getBytes());
+    public void testReadFromSkipPayload() throws Exception {
+        Message msg=new Message(Util.createRandomAddress("A"), "bela".getBytes()).src(Util.createRandomAddress("B"));
         addHeaders(msg);
         byte[] buf=Util.streamableToByteBuffer(msg);
 
@@ -432,7 +429,7 @@ public class MessageTest {
     }
 
     public static void testReadFromSkipPayloadNullPayload() throws Exception {
-        Message msg=new Message(Util.createRandomAddress("A"), Util.createRandomAddress("B"), null);
+        Message msg=new Message(Util.createRandomAddress("A")).src(Util.createRandomAddress("B"));
         addHeaders(msg);
         byte[] buf=Util.streamableToByteBuffer(msg);
 
@@ -478,17 +475,24 @@ public class MessageTest {
 
 
     protected static class DummyHeader extends Header {
-        protected final short num;
+        protected short num;
+
+        public DummyHeader() {
+        }
 
         public DummyHeader(short num) {
             this.num=num;
+        }
+        public short getMagicId() {return 1600;}
+        public Supplier<? extends Header> create() {
+            return DummyHeader::new;
         }
 
         public short getNum() {
             return num;
         }
 
-        public int size() {
+        public int serializedSize() {
             return 0;
         }
 

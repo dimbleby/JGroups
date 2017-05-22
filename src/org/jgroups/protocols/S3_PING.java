@@ -29,7 +29,10 @@ import java.util.*;
 /**
  * Discovery protocol using Amazon's S3 storage. The S3 access code reuses the example shipped by Amazon.
  * @author Bela Ban
+ * @deprecated Use NATIVE_S3_PING (https://github.com/jgroups-extras/native-s3-ping) instead.
+ *             S3_PING will be removed in 5.0.
  */
+@Deprecated
 public class S3_PING extends FILE_PING {
 
     @Property(description="The name of the AWS server")
@@ -258,9 +261,9 @@ public class S3_PING extends FILE_PING {
         } else if (pre_signed_put_url != null || pre_signed_delete_url != null) {
             throw new IllegalArgumentException("pre_signed_put_url and pre_signed_delete_url must both be set or both unset");
         }
-        if (prefix != null && location != null) {
-            throw new IllegalArgumentException("set either prefix or location, but not both");
-        }
+        //if (prefix != null && location != null) {
+        //    throw new IllegalArgumentException("set either prefix or location, but not both");
+        //}
         if (prefix != null && (access_key == null || secret_access_key == null)) {
             throw new IllegalArgumentException("access_key and secret_access_key must be set when setting prefix");
         }

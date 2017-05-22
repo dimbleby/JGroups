@@ -2,12 +2,13 @@
 package org.jgroups.stack;
 
 import org.jgroups.Address;
+import org.jgroups.Constructable;
 import org.jgroups.Global;
 import org.jgroups.PhysicalAddress;
-import org.jgroups.util.Util;
 
 import java.io.*;
 import java.net.*;
+import java.util.function.Supplier;
 
 
 /**
@@ -15,27 +16,12 @@ import java.net.*;
  * stack (UDP). Contains an InetAddress and port.
  * @author Bela Ban
  */
-public class IpAddress implements PhysicalAddress {
-    private static final long       serialVersionUID=-1818672332115113291L;
-    private InetAddress             ip_addr;
-    private int                     port;
-    static boolean                  resolve_dns;
-
-    static {
-        /* Trying to get value of resolve_dns. PropertyPermission not granted if
-        * running in an untrusted environment  with JNLP */
-        try {
-            String tmp=Util.getProperty(new String[]{Global.RESOLVE_DNS, "resolve.dns"}, null, null, "false");
-            resolve_dns=Boolean.valueOf(tmp);
-        }
-        catch (SecurityException ex){
-            resolve_dns=false;
-        }
-    }
+public class IpAddress implements PhysicalAddress, Constructable<IpAddress> {
+    protected InetAddress  ip_addr;
+    protected int          port;
 
 
-
-    // Used only by Externalization
+    // Used only by marshalling
     public IpAddress() {
     }
 
@@ -63,8 +49,11 @@ public class IpAddress implements PhysicalAddress {
             setAddressToLocalHost();
     }
 
+    public Supplier<? extends IpAddress> create() {
+        return IpAddress::new;
+    }
 
-    private void setAddressToLocalHost() {
+    protected void setAddressToLocalHost() {
         try {
             ip_addr=InetAddress.getLocalHost();  // get first NIC found (on multi-homed systems)
         }
@@ -98,8 +87,8 @@ public class IpAddress implements PhysicalAddress {
 
 
 
-    public final InetAddress  getIpAddress()               {return ip_addr;}
-    public final int          getPort()                    {return port;}
+    public InetAddress  getIpAddress() {return ip_addr;}
+    public  int         getPort()      {return port;}
 
 
     /**
@@ -111,8 +100,8 @@ public class IpAddress implements PhysicalAddress {
      * @exception java.lang.ClassCastException - if the specified object's type prevents it
      *            from being compared to this Object.
      */
-    public final int compareTo(Address o) {
-        int   h1, h2, rc; // added Nov 7 2005, makes sense with canonical addresses
+    public int compareTo(Address o) {
+        int h1, h2, rc; // added Nov 7 2005, makes sense with canonical addresses
 
         if(this == o) return 0;
         if(!(o instanceof IpAddress))
@@ -130,7 +119,7 @@ public class IpAddress implements PhysicalAddress {
     }
 
 
-    public final boolean equals(Object obj) {
+    public boolean equals(Object obj) {
         if(this == obj) return true; // added Nov 7 2005, makes sense with canonical addresses
 
         if(!(obj instanceof IpAddress))
@@ -146,8 +135,7 @@ public class IpAddress implements PhysicalAddress {
 
 
 
-
-    public final int hashCode() {
+    public int hashCode() {
         return ip_addr != null ? ip_addr.hashCode() + port : port;
     }
 
@@ -155,46 +143,13 @@ public class IpAddress implements PhysicalAddress {
 
 
     public String toString() {
-        StringBuilder sb=new StringBuilder();
-
-        if(ip_addr == null)
-            sb.append("<null>");
-        else {
-            if(ip_addr.isMulticastAddress())
-                sb.append(ip_addr.getHostAddress());
-            else {
-                String host_name;
-                if(resolve_dns) {
-                    host_name=ip_addr.getHostName();
-                }
-                else {
-                    host_name=ip_addr.getHostAddress();
-                }
-                sb.append(host_name);
-            }
-        }
-        sb.append(":").append(port);
-        return sb.toString();
+        return printIpAddress();
     }
 
-
-    public void readExternal(ObjectInput in) throws IOException, ClassNotFoundException {
-        try {
-            readFrom(in);
-        }
-        catch(Exception e) {
-            throw new IOException(e);
-        }
+    public String printIpAddress() {
+        return String.format("%s:%d", ip_addr != null? ip_addr.getHostAddress() : "<null>", port);
     }
 
-    public void writeExternal(ObjectOutput out) throws IOException {
-        try {
-            writeTo(out);
-        }
-        catch(Exception e) {
-            throw new IOException(e);
-        }
-    }
 
     public void writeTo(DataOutput out) throws Exception {
         if(ip_addr != null) {
@@ -229,7 +184,7 @@ public class IpAddress implements PhysicalAddress {
         port=in.readUnsignedShort();
     }
 
-    public int size() {
+    public int serializedSize() {
         // length (1 bytes) + 4 bytes for port
         int tmp_size=Global.BYTE_SIZE+ Global.SHORT_SIZE;
         if(ip_addr != null) {

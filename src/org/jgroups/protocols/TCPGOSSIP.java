@@ -11,8 +11,8 @@ import org.jgroups.conf.PropertyConverters;
 import org.jgroups.stack.IpAddress;
 import org.jgroups.stack.RouterStub;
 import org.jgroups.stack.RouterStubManager;
+import org.jgroups.util.NameCache;
 import org.jgroups.util.Responses;
-import org.jgroups.util.UUID;
 import org.jgroups.util.Util;
 
 import java.net.InetAddress;
@@ -24,18 +24,14 @@ import java.util.stream.Collectors;
 
 
 /**
- * The TCPGOSSIP protocol layer retrieves the initial membership (used by the
- * GMS when started by sending event FIND_INITIAL_MBRS down the stack). We do
- * this by contacting one or more GossipRouters, which must be running at
- * well-known addresses:ports. The responses should allow us to determine the
- * coordinator whom we have to contact, e.g. in case we want to join the group.
- * When we are a server (after having received the BECOME_SERVER event), we'll
- * respond to TCPGOSSIP requests with a TCPGOSSIP response.
- * <p>
- * The FIND_INITIAL_MBRS event will eventually be answered with a
- * FIND_INITIAL_MBRS_OK event up the stack.
- * 
+ * The TCPGOSSIP protocol layer retrieves the initial membership (used by GMS when started by sending event
+ * FIND_INITIAL_MBRS down the stack). We do this by contacting one or more GossipRouters, which must be running at
+ * well-known addresses:ports. The responses should allow us to determine the coordinator whom we have to contact,
+ * e.g. in case we want to join the group.
+ * When we are a server (after having received the BECOME_SERVER event), we'll respond to TCPGOSSIP requests with a
+ * TCPGOSSIP response.
  * @author Bela Ban
+ * @since a long time ago
  */
 public class TCPGOSSIP extends Discovery implements RouterStub.MembersNotification {
     
@@ -88,10 +84,6 @@ public class TCPGOSSIP extends Discovery implements RouterStub.MembersNotificati
                     "TCP:TCPGOSSIP as valid configurations");
     }
 
-    public void start() throws Exception {
-        super.start();
-    }
-
     public void stop() {
         super.stop();       
         stubManager.disconnectStubs();
@@ -110,7 +102,7 @@ public class TCPGOSSIP extends Discovery implements RouterStub.MembersNotificati
             log.trace("registering " + local_addr + " under " + cluster_name + " with GossipRouter");
             stubManager.destroyStubs();
             PhysicalAddress physical_addr = (PhysicalAddress) down_prot.down(new Event(Event.GET_PHYSICAL_ADDRESS, local_addr));
-            stubManager = new RouterStubManager(this,cluster_name, local_addr, UUID.get(local_addr), physical_addr, reconnect_interval).useNio(this.use_nio);
+            stubManager = new RouterStubManager(this, cluster_name, local_addr, NameCache.get(local_addr), physical_addr, reconnect_interval).useNio(this.use_nio);
             for (InetSocketAddress host : initial_hosts) {
                 RouterStub stub=stubManager.createAndRegisterStub(new IpAddress(bind_addr, 0), new IpAddress(host.getAddress(), host.getPort()));
                 stub.socketConnectionTimeout(sock_conn_timeout);
@@ -162,7 +154,7 @@ public class TCPGOSSIP extends Discovery implements RouterStub.MembersNotificati
     @Override
     public void members(List<PingData> mbrs) {
         PhysicalAddress      own_physical_addr=(PhysicalAddress)down(new Event(Event.GET_PHYSICAL_ADDRESS, local_addr));
-        PingData             data=new PingData(local_addr, false, org.jgroups.util.UUID.get(local_addr), own_physical_addr);
+        PingData             data=new PingData(local_addr, false, org.jgroups.util.NameCache.get(local_addr), own_physical_addr);
         PingHeader           hdr=new PingHeader(PingHeader.GET_MBRS_REQ).clusterName(cluster_name);
 
         Set<PhysicalAddress> physical_addrs=mbrs.stream().filter(ping_data -> ping_data != null && ping_data.getPhysicalAddr() != null)
@@ -175,7 +167,7 @@ public class TCPGOSSIP extends Discovery implements RouterStub.MembersNotificati
             final Message msg=new Message(physical_addr).setFlag(Message.Flag.INTERNAL, Message.Flag.DONT_BUNDLE, Message.Flag.OOB)
               .putHeader(this.id, hdr).setBuffer(marshal(data));
             log.trace("%s: sending discovery request to %s", local_addr, msg.getDest());
-            down_prot.down(new Event(Event.MSG, msg));
+            down_prot.down(msg);
         }
     }
 

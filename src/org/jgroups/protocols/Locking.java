@@ -27,6 +27,7 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
 
 
 /**
@@ -126,7 +127,7 @@ abstract public class Locking extends Protocol {
     public Object down(Event evt) {
         switch(evt.getType()) {
             case Event.LOCK:
-                LockInfo info=(LockInfo)evt.getArg();
+                LockInfo info=evt.getArg();
                 ClientLock lock=getLock(info.getName());
                 if(!info.isTrylock()) {
                     if(info.isLockInterruptibly()) {
@@ -156,7 +157,7 @@ abstract public class Locking extends Protocol {
 
 
             case Event.UNLOCK:
-                info=(LockInfo)evt.getArg();
+                info=evt.getArg();
                 lock=getLock(info.getName(), false);
                 if(lock != null)
                     lock.unlock();
@@ -166,7 +167,7 @@ abstract public class Locking extends Protocol {
                 unlockAll();
                 return null;
             case Event.LOCK_AWAIT:
-                info=(LockInfo)evt.getArg();
+                info=evt.getArg();
                 lock=getLock(info.getName(), false);
                 if (lock == null || !lock.acquired) {
                     throw new IllegalMonitorStateException();
@@ -193,7 +194,7 @@ abstract public class Locking extends Protocol {
                 }
                 return null;
             case Event.LOCK_SIGNAL:
-                AwaitInfo awaitInfo = (AwaitInfo)evt.getArg();
+                AwaitInfo awaitInfo =evt.getArg();
                 lock=getLock(awaitInfo.getName(), false);
                 if (lock == null || !lock.acquired) {
                     throw new IllegalMonitorStateException();
@@ -201,11 +202,11 @@ abstract public class Locking extends Protocol {
                 sendSignalConditionRequest(awaitInfo.getName(), awaitInfo.isAll());
                 return null;
             case Event.SET_LOCAL_ADDRESS:
-                local_addr=(Address)evt.getArg();
+                local_addr=evt.getArg();
                 break;
 
             case Event.VIEW_CHANGE:
-                handleView((View)evt.getArg());
+                handleView(evt.getArg());
                 break;
         }
         return down_prot.down(evt);
@@ -213,69 +214,74 @@ abstract public class Locking extends Protocol {
 
     public Object up(Event evt) {
         switch(evt.getType()) {
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                LockingHeader hdr=(LockingHeader)msg.getHeader(id);
-                if(hdr == null)
-                    break;
-
-                Request req=null;
-                try {
-                    req=Util.streamableFromBuffer(Request.class, msg.getRawBuffer(), msg.getOffset(), msg.getLength());
-                }
-                catch(Exception ex) {
-                    log.error("failed deserializng request", ex);
-                    return null;
-                }
-                log.trace("[%s] <-- [%s] %s", local_addr, msg.getSrc(), req);
-                switch(req.type) {
-                    case GRANT_LOCK:
-                    case RELEASE_LOCK:
-                        handleLockRequest(req);
-                        break;
-                    case LOCK_GRANTED:
-                        handleLockGrantedResponse(req.lock_name, req.lock_id, req.owner);
-                        break;
-                    case LOCK_DENIED:
-                        handleLockDeniedResponse(req.lock_name, req.lock_id, req.owner);
-                        break;
-                    case CREATE_LOCK:
-                        handleCreateLockRequest(req.lock_name, req.owner);
-                        break;
-                    case DELETE_LOCK:
-                        handleDeleteLockRequest(req.lock_name);
-                        break;
-                    case COND_SIG:
-                    case COND_SIG_ALL:
-                        handleSignalRequest(req);
-                        break;
-                    case LOCK_AWAIT:
-                        handleAwaitRequest(req.lock_name, req.owner);
-                        handleLockRequest(req);
-                        break;
-                    case DELETE_LOCK_AWAIT:
-                        handleDeleteAwaitRequest(req.lock_name, req.owner);
-                        break;
-                    case SIG_RET:
-                        handleSignalResponse(req.lock_name, req.owner);
-                        break;
-                    case CREATE_AWAITER:
-                        handleCreateAwaitingRequest(req.lock_name, req.owner);
-                        break;
-                    case DELETE_AWAITER:
-                        handleDeleteAwaitingRequest(req.lock_name, req.owner);
-                        break;
-                    default:
-                        log.error("Request of type %s not known", req.type);
-                        break;
-                }
-                return null;
-
             case Event.VIEW_CHANGE:
-                handleView((View)evt.getArg());
+                handleView(evt.getArg());
                 break;
         }
         return up_prot.up(evt);
+    }
+
+    public Object up(Message msg) {
+        LockingHeader hdr=msg.getHeader(id);
+        if(hdr == null)
+            return up_prot.up(msg);
+
+        if (null != view && !view.containsMember(msg.getSrc())) {
+            log.error("Received locking event from '%s' but member is not present in the current view - ignoring request", msg.src());
+            return null;
+        }
+
+        Request req=null;
+        try {
+            req=Util.streamableFromBuffer(Request.class, msg.getRawBuffer(), msg.getOffset(), msg.getLength());
+        }
+        catch(Exception ex) {
+            log.error("failed deserializng request", ex);
+            return null;
+        }
+        log.trace("[%s] <-- [%s] %s", local_addr, msg.getSrc(), req);
+        switch(req.type) {
+            case GRANT_LOCK:
+            case RELEASE_LOCK:
+                handleLockRequest(req);
+                break;
+            case LOCK_GRANTED:
+                handleLockGrantedResponse(req.lock_name, req.lock_id, req.owner);
+                break;
+            case LOCK_DENIED:
+                handleLockDeniedResponse(req.lock_name, req.lock_id, req.owner);
+                break;
+            case CREATE_LOCK:
+                handleCreateLockRequest(req.lock_name, req.owner);
+                break;
+            case DELETE_LOCK:
+                handleDeleteLockRequest(req.lock_name);
+                break;
+            case COND_SIG:
+            case COND_SIG_ALL:
+                handleSignalRequest(req);
+                break;
+            case LOCK_AWAIT:
+                handleAwaitRequest(req.lock_name, req.owner);
+                handleLockRequest(req);
+                break;
+            case DELETE_LOCK_AWAIT:
+                handleDeleteAwaitRequest(req.lock_name, req.owner);
+                break;
+            case SIG_RET:
+                handleSignalResponse(req.lock_name, req.owner);
+                break;
+            case CREATE_AWAITER:
+                handleCreateAwaitingRequest(req.lock_name, req.owner);
+                break;
+            case DELETE_AWAITER:
+                handleDeleteAwaitingRequest(req.lock_name, req.owner);
+                break;
+            default:
+                log.error("Request of type %s not known", req.type);
+                break;
+        }
+        return null;
     }
 
     protected ClientLock getLock(String name) {
@@ -375,7 +381,7 @@ abstract public class Locking extends Protocol {
             msg.setFlag(Message.Flag.DONT_BUNDLE);
         log.trace("[%s] --> %s] %s", local_addr, dest == null? "ALL" : dest, req);
         try {
-            down_prot.down(new Event(Event.MSG, msg));
+            down_prot.down(msg);
         }
         catch(Exception ex) {
             log.error("failed sending %s request: %s", req.type, ex);
@@ -1340,7 +1346,7 @@ abstract public class Locking extends Protocol {
             type=Type.values()[in.readByte()];
             lock_name=Bits.readString(in);
             lock_id=in.readInt();
-            owner=(Owner)Util.readStreamable(Owner.class, in);
+            owner=Util.readStreamable(Owner.class, in);
             timeout=in.readLong();
             is_trylock=in.readBoolean();
         }
@@ -1391,8 +1397,12 @@ abstract public class Locking extends Protocol {
 
         public LockingHeader() {
         }
+        public short getMagicId() {return 72;}
+        public Supplier<? extends Header> create() {
+            return LockingHeader::new;
+        }
 
-        public int size() {
+        public int serializedSize() {
             return 0;
         }
 

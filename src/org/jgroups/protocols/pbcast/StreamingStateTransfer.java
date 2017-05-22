@@ -17,7 +17,8 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Supplier;
 
 /**
  * Base class for state transfer protocols which use streaming (or chunking) to transfer state between two members.
@@ -63,9 +64,9 @@ public abstract class StreamingStateTransfer extends Protocol implements Process
     /*
      * --------------------------------------------- JMX statistics -------------------------------
      */
-    protected final AtomicInteger num_state_reqs=new AtomicInteger(0);
+    protected final LongAdder     num_state_reqs=new LongAdder();
 
-    protected final AtomicLong    num_bytes_sent=new AtomicLong(0);
+    protected final LongAdder     num_bytes_sent=new LongAdder();
 
     protected double              avg_state_size;
 
@@ -93,8 +94,8 @@ public abstract class StreamingStateTransfer extends Protocol implements Process
     protected final ProcessingQueue<Address> state_requesters=new ProcessingQueue<Address>().setHandler(this);
 
 
-    @ManagedAttribute public int    getNumberOfStateRequests()    {return num_state_reqs.get();}
-    @ManagedAttribute public long   getNumberOfStateBytesSent()   {return num_bytes_sent.get();}
+    @ManagedAttribute public long   getNumberOfStateRequests()    {return num_state_reqs.sum();}
+    @ManagedAttribute public long   getNumberOfStateBytesSent()   {return num_bytes_sent.sum();}
     @ManagedAttribute public double getAverageStateSize()         {return avg_state_size;}
     @ManagedAttribute public int    getThreadPoolSize()           {return thread_pool.getPoolSize();}
     @ManagedAttribute public long   getThreadPoolCompletedTasks() {return thread_pool.getCompletedTaskCount();}
@@ -108,8 +109,8 @@ public abstract class StreamingStateTransfer extends Protocol implements Process
 
     public void resetStats() {
         super.resetStats();
-        num_state_reqs.set(0);
-        num_bytes_sent.set(0);
+        num_state_reqs.reset();
+        num_bytes_sent.reset();
         avg_state_size=0;
     }
 
@@ -142,11 +143,11 @@ public abstract class StreamingStateTransfer extends Protocol implements Process
         switch(evt.getType()) {
 
             case Event.VIEW_CHANGE:
-                handleViewChange((View)evt.getArg());
+                handleViewChange(evt.getArg());
                 break;
 
             case Event.GET_STATE:
-                StateTransferInfo info=(StateTransferInfo)evt.getArg();
+                StateTransferInfo info=evt.getArg();
                 Address target=info.target;
 
                 if(Objects.equals(target, local_addr)) {
@@ -165,72 +166,69 @@ public abstract class StreamingStateTransfer extends Protocol implements Process
                     Message state_req=new Message(target).putHeader(this.id, new StateHeader(StateHeader.STATE_REQ))
                       .setFlag(Message.Flag.SKIP_BARRIER, Message.Flag.DONT_BUNDLE, Message.Flag.OOB);
                     log.debug("%s: asking %s for state", local_addr, target);
-                    down_prot.down(new Event(Event.MSG, state_req));
+                    down_prot.down(state_req);
                 }
                 return null; // don't pass down any further !
 
             case Event.CONFIG:
-                handleConfig((Map<String, Object>)evt.getArg());
+                handleConfig(evt.getArg());
                 break;
 
             case Event.SET_LOCAL_ADDRESS:
-                local_addr=(Address)evt.getArg();
+                local_addr=evt.getArg();
                 break;
         }
 
         return down_prot.down(evt); // pass on to the layer below us
     }
 
-   
-
     public Object up(Event evt) {
         switch(evt.getType()) {
-
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                StateHeader hdr=(StateHeader)msg.getHeader(this.id);
-                if(hdr != null) {
-                    Address sender=msg.getSrc();
-                    switch(hdr.type) {
-                        case StateHeader.STATE_REQ:
-                            state_requesters.add(msg.getSrc());
-                            break;
-                        case StateHeader.STATE_RSP:
-                            handleStateRsp(sender, hdr);
-                            break;
-                        case StateHeader.STATE_PART:
-                            handleStateChunk(sender, msg.getRawBuffer(), msg.getOffset(), msg.getLength());
-                            break;
-                        case StateHeader.STATE_EOF:
-                            log.trace("%s <-- EOF <-- %s", local_addr, sender);
-                            handleEOF(sender);
-                            break;
-                        case StateHeader.STATE_EX:
-                            try {
-                                handleException(Util.exceptionFromBuffer(msg.getRawBuffer(), msg.getOffset(), msg.getLength()));
-                            }
-                            catch(Throwable t) {
-                                log.error("failed deserializaing state exception", t);
-                            }
-                            break;
-                        default:
-                            log.error("%s: type %d not known in StateHeader", local_addr, hdr.type);
-                            break;
-                    }
-                    return null;
-                }
-                break;
-
             case Event.TMP_VIEW:
             case Event.VIEW_CHANGE:
-                handleViewChange((View)evt.getArg());
+                handleViewChange(evt.getArg());
                 break;
 
             case Event.CONFIG:
-                handleConfig((Map<String,Object>)evt.getArg());
+                handleConfig(evt.getArg());
                 break;
         }
         return up_prot.up(evt);
+    }
+
+    public Object up(Message msg) {
+        StateHeader hdr=msg.getHeader(this.id);
+        if(hdr != null) {
+            Address sender=msg.getSrc();
+            switch(hdr.type) {
+                case StateHeader.STATE_REQ:
+                    state_requesters.add(msg.getSrc());
+                    break;
+                case StateHeader.STATE_RSP:
+                    handleStateRsp(sender, hdr);
+                    break;
+                case StateHeader.STATE_PART:
+                    handleStateChunk(sender, msg.getRawBuffer(), msg.getOffset(), msg.getLength());
+                    break;
+                case StateHeader.STATE_EOF:
+                    log.trace("%s <-- EOF <-- %s", local_addr, sender);
+                    handleEOF(sender);
+                    break;
+                case StateHeader.STATE_EX:
+                    try {
+                        handleException(Util.exceptionFromBuffer(msg.getRawBuffer(), msg.getOffset(), msg.getLength()));
+                    }
+                    catch(Throwable t) {
+                        log.error("failed deserializaing state exception", t);
+                    }
+                    break;
+                default:
+                    log.error("%s: type %d not known in StateHeader", local_addr, hdr.type);
+                    break;
+            }
+            return null;
+        }
+        return up_prot.up(msg);
     }
 
 
@@ -331,7 +329,7 @@ public abstract class StreamingStateTransfer extends Protocol implements Process
         try {
             Message eof_msg=new Message(requester).putHeader(getId(), new StateHeader(StateHeader.STATE_EOF));
             log.trace("%s --> EOF --> %s", local_addr, requester);
-            down(new Event(Event.MSG, eof_msg));
+            down(eof_msg);
         }
         catch(Throwable t) {
             log.error("%s: failed sending EOF to %s", local_addr, requester);
@@ -342,7 +340,7 @@ public abstract class StreamingStateTransfer extends Protocol implements Process
         try {
             Message ex_msg=new Message(requester).setBuffer(Util.exceptionToBuffer(exception))
               .putHeader(getId(), new StateHeader(StateHeader.STATE_EX));
-            down(new Event(Event.MSG, ex_msg));
+            down(ex_msg);
         }
         catch(Throwable t) {
             log.error("%s: failed sending exception %s to %s", local_addr, exception.toString(), requester);
@@ -420,9 +418,9 @@ public abstract class StreamingStateTransfer extends Protocol implements Process
         modifyStateResponseHeader(hdr);
         Message state_rsp=new Message(requester).putHeader(this.id, hdr);
         log.debug("%s: responding to state requester %s", local_addr, requester);
-        down_prot.down(new Event(Event.MSG, state_rsp));
+        down_prot.down(state_rsp);
         if(stats)
-            num_state_reqs.incrementAndGet();
+            num_state_reqs.increment();
 
         try {
             createStreamToRequester(requester);
@@ -536,6 +534,10 @@ public abstract class StreamingStateTransfer extends Protocol implements Process
             this.digest=digest;
             this.bind_addr=bind_addr;
         }
+        public short getMagicId() {return 65;}
+        public Supplier<? extends Header> create() {
+            return StateHeader::new;
+        }
 
         public int getType() {
             return type;
@@ -580,7 +582,7 @@ public abstract class StreamingStateTransfer extends Protocol implements Process
             bind_addr=Util.readStreamable(IpAddress.class, in);
         }
 
-        public int size() {
+        public int serializedSize() {
             int retval=Global.BYTE_SIZE; // type
             retval+=Global.BYTE_SIZE;    // presence byte for my_digest
             if(digest != null)

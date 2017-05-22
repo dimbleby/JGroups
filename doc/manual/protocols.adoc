@@ -36,6 +36,78 @@ of all protocols, org.jgroups.stack.Protocol.
 |===============
 
 
+[[SystemProperties]]
+=== System properties
+
+The table below lists system properties which can be used to override attribute values, mostly in protocols. For example,
+if we have a config like this:
+
+[source,xml]
+----
+<UDP bind_addr="127.0.0.1" />
+----
+
+, then the bind address will be `127.0.0.1`. However, if we run the system with `-Djgroups.bind_addr=1.2.3.4` (see below),
+the bind address will be `1.2.3.4`.
+
+
+Note that if we use our own variables, like this:
+
+[source,xml]
+----
+<UDP bind_addr="\${my.bind_addr:127.0.0.1}" />
+----
+
+, then system property `my.bind_addr` takes precedence over `jgroups.bind_addr`. In the above case, the actual bind
+address chosen will be:
+
+|=================
+|System properties | Bind address picked
+| `-Dmy.bind_addr=1.2.3.4` `-Djgroups.bind_addr=5.6.7.8` | `1.2.3.4`
+| `-Djgroups.bind_addr=5.6.7.8` | `5.6.7.8`
+| none | `127.0.0.1`
+|=================
+
+
+.System properties
+[align="left",width="90%",cols="4,10",options="header"]
+|===============
+|Name|Description
+
+| jgroups.bind_addr | The network interface to be used. Example: `-Djgroups.bind_addr=192.168.1.3` or
+                      `-Djgroups.bind_addr=match-interface:eth0`. Overrides attribute `bind_addr` in the transport
+                      protocol (see below).
+| jgroups.external_addr | The external bind address to be used. Overrides `external_addr` in the transport protocol.
+
+| jgroups.external_port | The external port to be used by the transport.
+| jgroups.tcp.client_bind_addr | The network interface client sockets in TCP should bind to. Overrides `client_bind_addr`
+                                 in TCP
+| jgroups.tcpping.initial_hosts | The list of initial hosts in TCPPING
+| jgroups.udp.mcast_addr | The multicast address used by UDP
+| jgroups.udp.mcast_port | The multicast port used by UDP
+| jgroups.udp.ip_ttl | The TTL used by UDP
+| jgroups.mping.mcast_addr | The multicast address used by MPING
+| jgroups.mping.mcast_port | The multicast port used by MPING
+| jgroups.mping.ip_ttl | The TTL used by MPING
+| jgroups.conf.magic_number_file | The file where the mappings between IDs and classes are defined.
+                                   Default: `jg-magic-map.xml`
+| jgroups.conf.protocol_id_file | The file where the mappings between IDs and protocols are defined.
+                                  Default: `jg-protocol-ids.xml`
+| jgroups.name_cache.max_elements | The max number of elements in the NameCache which holds mappings between addresses
+                                    and logical names
+| jgroups.name_cache.max_age | The max age (in milliseconds) a mapping between address and logical name is kept in the
+                               NameCache. Not that elements are only evicted if there's not enough room.
+| jgroups.ipmcast.prefix | Needed if an IPv4 multicast address is used in an IPv6 system. The prefix (default: `ff0e::`)
+                           will prefix the IPv4 multicast address, e.g. `232.5.5.5` -> `ff0e::232.5.5.5`
+| jgroups.use.jdk_logger | If true, the JDK logger (`java.util.logging.Logger`) will be used
+| jgroups.log_class | The fully qualified name of a class implementing a logger to be used. See <<Logging>> for details.
+| jgroups.msg.default_headers | System prop for defining the default number of headers in a Message (default: 4).
+
+|===============
+
+
+
+
 [[Transport]]
 === Transport
 
@@ -50,7 +122,7 @@ It can also be set for the entire stack using system property +$$-Djgroups.bind_
 provides a value for bind_addr unless it has already been set in the XML config.
         
 
-The following special values are also recognized for ++$$bind_addr$$++:
+The following special values are also recognized for `bind_addr`:
         
 
 GLOBAL:: Picks a global IP address if available. If not, falls back to a SITE_LOCAL IP address.
@@ -73,6 +145,9 @@ match-address:: Pick an address which matches a pattern against the host address
 
 match-host:: Pick an address which matches a pattern against the host name,
              e.g. +match-host:linux.\*+
+
+custom:: Use custom code to pick the bind address. The value after `custom` needs to be the fully qualified name
+         of a class implementing `Supplier<InetAddress>`, e.g. bind_addr="custom:com.acme.BindAddressPicker".
                     
 An example of setting the bind address in UDP to use a site local address is:
         
@@ -83,6 +158,17 @@ An example of setting the bind address in UDP to use a site local address is:
 
 This will pick any address of any interface that's site-local, e.g. a +192.168.x.x+ or
 +10.x.x.x+ address.
+
+Since 4.0, it is possible to define a list of addresses in `bind_addr`. Each entry of the list will be tried and the
+first entry that works will be used. Example:
+
+[source,xml]
+----
+<UDP bind_addr="match-interface:eth2,10.5.5.5,match-interface:en.\*,127.0.0.1" />
+----
+
+This would try to bind to `eth2` first. If not found, then an interface with address `10.5.5.5` would be tried,
+then an interface starting with `en` would be tried. If still not found, we'd bind to `127.0.0.1`.
         
 
 [[UDP]]
@@ -282,24 +368,144 @@ FILE_PING can be used instead of GossipRouter in cases where no external process
             
 
 Since 3.5, the way FILE_PING performs discovery has changed. The following paragraphs describe the new
-mechanism to discover members via FILE_PING or subclasses (e.g. S3_PING or GOOGLE_PING),
+mechanism to discover members via FILE_PING or subclasses (e.g. S3_PING GOOGLE_PING or GOOGLE_PING2),
 so this applies to all cloud-based stores as well.
             
 Instead of storing 1 file per member in the file system or cloud store, we only store 1 file for
 _all_ members. This has the advantage, especially in cloud stores, that the number
 of reads is not a function of the cluster size, e.g. we don't have to perform 1000 reads for member
-discovery in a 1000 node cluster, but just a single read. This is important as the cost of
+discovery in a 1000 node cluster, but just a single read.
+
+This is important as the cost of
 1000 times the round trip time of a (REST) call to the cloud store is certainly higher that the cost
 of a single call. There may also be a charge for calls to the cloud, so a reduced number of calls lead
 to reduced charges for cloud store access, especially in large clusters.
 
-
 The current coordinator is always in charge of writing the file; participants never write it, but only
 read it. When there is a split and we have multiple coordinator, we may also have multiple files.
-            
 
 The name of a file is always UUID.logical_name.list, e.g. `0000-0000-000000000001.m1.1.list`, which has
 a UUID of 1, a logical name of "m1.1" and the suffix ".list".
+
+
+===== Removing a member which crashed or left gracefully
+When we have view `{A,B,C,D}` (A being the coordinator), the file `2f73fcac-aecb-2a98-4300-26ca4b1016d2.A.list` might
+have the following contents:
+
+----
+C 	c0a6f4f8-a4a3-60c1-8420-07c81c0256d6 	192.168.1.168:7802 	F
+D 	9db6cf43-138c-d7cb-8eb3-2aa4e7cb5f7e 	192.168.1.168:7803 	F
+A 	2f73fcac-aecb-2a98-4300-26ca4b1016d2 	192.168.1.168:7800 	T
+B 	c6afa01d-494f-f340-c0db-9795102ac2a3 	192.168.1.168:7801 	F
+----
+
+It shows the 4 members with their UUIDs, IP addreses and ports, and the coordinator (A). When we now make C leave
+(gracefully, or by killing it), the file should have 3 lines, but it doesn't:
+
+----
+C 	c0a6f4f8-a4a3-60c1-8420-07c81c0256d6 	192.168.1.168:7802 	F
+D 	9db6cf43-138c-d7cb-8eb3-2aa4e7cb5f7e 	192.168.1.168:7803 	F
+A 	2f73fcac-aecb-2a98-4300-26ca4b1016d2 	192.168.1.168:7800 	T
+B 	c6afa01d-494f-f340-c0db-9795102ac2a3 	192.168.1.168:7801 	F
+----
+
+Indeed, the entry for C is still present! Why?
+
+The reason is that the entry for C is marked as _removable_, but the entry is not removed straight away, because that
+would require a call to the store, which might be expensive, or cost money. For instance, if the backend store is
+cloud based, then the REST call to the cloud store might cost money.
+
+Therefore, removable members are only removed when the logical cache size exceeds its capacity. The capacity is defined
+in `TP.logical_addr_cache_max_size`. Alternatively, if `TP.logical_addr_cache_reaper_interval` is greater than 0,
+then a reaper task will scan the logical cache every `logical_addr_cache_reaper_interval` milliseconds and remove
+elements marked as removable _and older than `TP.logical_addr_cache_expiration` milliseconds_.
+
+We can look at the logical cache with JMX or probe (slightly edited):
+
+----
+[belasmac] /Users/bela/jgroups-azure$ probe.sh uuids
+
+#1 (338 bytes):
+local_addr=A [ip=192.168.1.168:7800, version=4.0.0-SNAPSHOT, cluster=draw, 3 mbr(s)]
+local_addr=A
+uuids=3 elements:
+A: 2f73fcac-aecb-2a98-4300-26ca4b1016d2: 192.168.1.168:7800 (9 secs old)
+D: 9db6cf43-138c-d7cb-8eb3-2aa4e7cb5f7e: 192.168.1.168:7803 (5 secs old)
+B: c6afa01d-494f-f340-c0db-9795102ac2a3: 192.168.1.168:7801 (1 secs old)
+
+#2 (338 bytes):
+local_addr=B [ip=192.168.1.168:7801, version=4.0.0-SNAPSHOT, cluster=draw, 3 mbr(s)]
+local_addr=B
+uuids=3 elements:
+A: 2f73fcac-aecb-2a98-4300-26ca4b1016d2: 192.168.1.168:7800 (1 secs old)
+D: 9db6cf43-138c-d7cb-8eb3-2aa4e7cb5f7e: 192.168.1.168:7803 (5 secs old)
+B: c6afa01d-494f-f340-c0db-9795102ac2a3: 192.168.1.168:7801 (2 secs old)
+
+#3 (339 bytes):
+local_addr=D [ip=192.168.1.168:7803, version=4.0.0-SNAPSHOT, cluster=draw, 3 mbr(s)]
+local_addr=D
+uuids=3 elements:
+A: 2f73fcac-aecb-2a98-4300-26ca4b1016d2: 192.168.1.168:7800 (1 secs old)
+D: 9db6cf43-138c-d7cb-8eb3-2aa4e7cb5f7e: 192.168.1.168:7803 (11 secs old)
+B: c6afa01d-494f-f340-c0db-9795102ac2a3: 192.168.1.168:7801 (1 secs old)
+
+3 responses (3 matches, 0 non matches)
+----
+
+This shows that the reaper must have removed the stale entry for C already.
+
+If we start C again and then kill it again and immediately look at the file, then the contents are:
+
+----
+D 	9db6cf43-138c-d7cb-8eb3-2aa4e7cb5f7e 	192.168.1.168:7803 	F
+A 	2f73fcac-aecb-2a98-4300-26ca4b1016d2 	192.168.1.168:7800 	T
+B 	c6afa01d-494f-f340-c0db-9795102ac2a3 	192.168.1.168:7801 	F
+C 	5b36fe23-b151-6859-3953-97addfa2534d 	192.168.1.168:7802 	F
+----
+
+We can see that C is still present.
+
+NOTE: If we restart C a couple of time, the file will actually list multiple Cs. However, each entry is is different,
+as only the logical name is the same, but the actual addresses (UUIDs) are different.
+
+
+Running probe immediately after restarting C, before the reaper kicks in, it indeed shows the old C as being removable:
+
+----
+[belasmac] /Users/bela/jgroups-azure$ probe.sh uuids
+
+#1 (423 bytes):
+local_addr=A [ip=192.168.1.168:7800, version=4.0.0-SNAPSHOT, cluster=draw, 3 mbr(s)]
+local_addr=A
+uuids=4 elements:
+A: 2f73fcac-aecb-2a98-4300-26ca4b1016d2: 192.168.1.168:7800 (5 secs old)
+C: 5b36fe23-b151-6859-3953-97addfa2534d: 192.168.1.168:7802 (5 secs old, removable)
+D: 9db6cf43-138c-d7cb-8eb3-2aa4e7cb5f7e: 192.168.1.168:7803 (9 secs old)
+B: c6afa01d-494f-f340-c0db-9795102ac2a3: 192.168.1.168:7801 (11 secs old)
+
+#2 (423 bytes):
+local_addr=B [ip=192.168.1.168:7801, version=4.0.0-SNAPSHOT, cluster=draw, 3 mbr(s)]
+local_addr=B
+uuids=4 elements:
+A: 2f73fcac-aecb-2a98-4300-26ca4b1016d2: 192.168.1.168:7800 (15 secs old)
+C: 5b36fe23-b151-6859-3953-97addfa2534d: 192.168.1.168:7802 (5 secs old, removable)
+D: 9db6cf43-138c-d7cb-8eb3-2aa4e7cb5f7e: 192.168.1.168:7803 (9 secs old)
+B: c6afa01d-494f-f340-c0db-9795102ac2a3: 192.168.1.168:7801 (5 secs old)
+
+#3 (424 bytes):
+local_addr=D [ip=192.168.1.168:7803, version=4.0.0-SNAPSHOT, cluster=draw, 3 mbr(s)]
+local_addr=D
+uuids=4 elements:
+A: 2f73fcac-aecb-2a98-4300-26ca4b1016d2: 192.168.1.168:7800 (15 secs old)
+C: 5b36fe23-b151-6859-3953-97addfa2534d: 192.168.1.168:7802 (5 secs old, removable)
+D: 9db6cf43-138c-d7cb-8eb3-2aa4e7cb5f7e: 192.168.1.168:7803 (5 secs old)
+B: c6afa01d-494f-f340-c0db-9795102ac2a3: 192.168.1.168:7801 (11 secs old)
+
+3 responses (3 matches, 0 non matches)
+----
+
+Here, we can see that C is marked as removable. Once its entry is 60 seconds old (`logical_addr_cache_expiration`), then
+the reaper (if configured to run) will remove the element on its next run.
             
 
 [[BootstrapConfiguration]]
@@ -481,9 +687,7 @@ Here's an example for public buckets with no credentials:
 [source,xml]
 ----
 
-<S3_PING location="my_bucket"
-         timeout="2000" num_initial_members="3"/>
-            
+<S3_PING location="my_bucket"/>
 ----
 
 And finally, here's an example for public readable buckets with pre-signed URLs:
@@ -495,7 +699,7 @@ And finally, here's an example for public readable buckets with pre-signed URLs:
 
 <S3_PING pre_signed_put_url="http://s3.amazonaws.com/my_bucket/DemoCluster/node1?AWSAccessKeyId=access_key&Expires=1316276200&Signature=it1cUUtgCT9ZJyCJDj2xTAcRTFg%3D"
          pre_signed_delete_url="http://s3.amazonaws.com/my_bucket/DemoCluster/node1?AWSAccessKeyId=access_key&Expires=1316276200&Signature=u4IFPRq%2FL6%2FAohykIW4QrKjR23g%3D"
-         timeout="2000" num_initial_members="3"/>
+         />
             
 ----
 
@@ -506,25 +710,24 @@ ${S3_PING}
 ==== AWS_PING
 
 This is a protocol written by Meltmedia, which uses the AWS API. It is not part of JGroups, but can be
-downloaded at link:$$http://meltmedia.github.io/jgroups-aws/$$[].
-
+downloaded at link:$$https://github.com/meltmedia/jgroups-aws$$[].
 
 ==== Native S3 PING
 
 This implementation by Zalando uses the AWS SDK. It is not part of JGroups, but can be found at
-link:$$https://github.com/zalando/jgroups-native-s3-ping/$$[].
+https://github.com/zalando/jgroups-native-s3-ping. This protocols works with JGroups versions 3.x.
+
+There's a refactored version of AWS_PING that was ported (in 2017) to run on JGroups 4.x at
+https://github.com/jgroups-extras/native-s3-ping.
 
 
 
 ==== GOOGLE_PING
 
 GOOGLE_PING is a subclass of S3_PING and inherits most of the functionality. It uses Google Cloud
-                Storage to store information about individual members.
-            
+Storage to store information about individual members.
 
 The snippet below shows a sample config:
-            
-
 
 [source,xml]
 ----
@@ -538,11 +741,72 @@ The snippet below shows a sample config:
 ----
 
 This will use a bucket "jgroups-bucket" or create one if it doesn't exist, then create another folder
-                under it with the cluster name, and finally use 1 object per member in that location for member info.
+under it with the cluster name, and finally use 1 object per member in that location for member info.
             
 
 ${GOOGLE_PING}
 
+NOTE: `GOOGLE_PING` has been deprecated and <<GOOGLE_PING2>> should be used instead.
+
+
+[[GOOGLE_PING2]]
+==== GOOGLE_PING2
+
+https://github.com/jgroups-extras/jgroups-google[GOOGLE_PING2] is the successor to `GOOGLE_PING` and uses Google's
+client library to access Google Compute Storage. It is the recommended way to access GCS and the project is hosted at
+https://github.com/jgroups-extras/jgroups-google.
+
+
+
+==== DNS_PING
+
+DNS_PING uses DNS `A` or `SRV` entries to perform discovery. Initially this protocol was designed for
+https://kubernetes.io[Kubernetes] and https://www.openshift.org[OpenShift] but it suitable for any type of DNS discovery.
+
+In order to enable DNS discovery for application deployed on Kubernetes/OpenShift one must create a
+https://kubernetes.io/docs/user-guide/services/#headless-services[Governing Headless Service] with proper
+selector covering desired Pods. The Service will ensure that DNS entries are populated as soon as Pods are in Ready state.
+
+
+The snippet below shows a sample config:
+
+
+
+[source,xml]
+----
+
+<dns.DNS_PING
+            dns_address="192.168.0.17"
+            dns_query="jgroups-dns-ping.myproject.svc.cluster.local" />
+
+----
+
+This will turn on DNS discovery using DNS server at address `192.168.0.17` and DNS query `jgroups-dns-ping.myproject.svc.cluster.local`.
+
+It is also possible to use `SRV` entries for discovery as shown below:
+
+
+
+[source,xml]
+----
+
+<dns.DNS_PING
+            dns_address="192.168.0.17"
+            dns_query="_ping._tcp.jgroups-dns-ping.myproject.svc.cluster.local"
+            dns_record_type="SRV" />
+
+----
+
+Kubernetes SRV entries are created using the following scheme: `_my-port-name._my-port-protocol.my-svc.my-namespace.svc.cluster.local`.
+For more information, please refer to https://kubernetes.io/docs/admin/dns[Kubernetes DNS Admin Guide].
+
+NOTE: Note that both <<KUBE_PING>> and <<DNS_PING>> can be used in Kubernetes/OpenShift. The main difference between them is that
+      <<KUBE_PING>> uses Kubernetes API for discovery whereas <<DNS_PING>> uses DNS entries. Having said that, <<DNS_PING>> should
+      be used together with a Governing Service, which makes it perfect fit for
+      https://kubernetes.io/docs/tutorials/stateful-application/basic-stateful-set[Stateful Sets].
+
+
+${DNS_PING}
 
 
 ==== SWIFT_PING
@@ -576,6 +840,25 @@ Currently only Openstack Keystone authentication is supported. Here is a sample 
 ${SWIFT_PING}
 
 
+==== KUBE_PING
+
+This Kubernetes-based discovery protocol can be used with OpenShift [2] and uses Kubernetes to discover cluster
+members. `KUBE_PING` is hosted on jgroups-extras; refer to [1] for details.
+
+
+[1] https://github.com/jgroups-extras/jgroups-kubernetes
+
+[2] https://www.openshift.com
+
+
+[[AZURE_PING]]
+==== AZURE_PING
+
+This is a discovery protocol that allows cluster nodes to run on the Azure cloud [1]. For details refer to [2].
+
+[1] https://azure.microsoft.com/en-us/
+
+[2] https://github.com/jgroups-extras/jgroups-azure
 
 
 
@@ -609,9 +892,6 @@ ${PDC}
 
 === Merging after a network partition
 
-[[MERGE2]]
-==== MERGE2
-
 If a cluster gets split for some reasons (e.g. network partition), this protocol merges the subclusters
 back into one cluster. It is only run by the coordinator (the oldest member in a cluster), which
 periodically multicasts its presence and view information. If another coordinator (for the same cluster)
@@ -625,23 +905,16 @@ Following a merge, the coordinator of the merged group can shift from the typica
 of the various subgroups need to reach a common decision as to who the new coordinator is.
 In order to ensure a consistent result, each coordinator combines the addresses of all the members
 in a list and then sorts the list. The first member in the sorted list becomes the coordinator.
-The sort order is determined by how the address implements the interface. Then JGroups  compares based
+The sort order is determined by how the address implements the interface. Then JGroups compares based
 on the UUID. So, take a hypothetical case where two machines were running, with one machine running
 three separate cluster members and the other two members. If communication between the machines were cut,
 the following subgroups would form:
 +{A,B} and {C,D,E}+
-Following the merge, the new view would be: +{C,D,A,B,E}+, with C being the new
-coordinator.
+Following the merge, the new view would be: +{C,D,A,B,E}+, with C being the new coordinator.
             
-
 Note that "A", "B" and so on are just logical names, attached to UUIDs, but the actual sorting is done
                 on the actual UUIDs.
             
-${MERGE2}
-
-NOTE: `MERGE2` is deprecated and will be removed in 4.0. Users of it should switch to `MERGE3`.
-
-
 
 [[MERGE3]]
 ==== MERGE3
@@ -660,15 +933,13 @@ The merge leader then asks the senders of the inconsistent ViewIds for their ful
 it simply passes a `MERGE` event up the stack, where the merge will be handled (by `GMS`) in exactly the same
 way as if `MERGE2` has generated the `MERGE` event.
 
-The advantages of `MERGE3` compared to `MERGE2` are:
+The advantages of `MERGE3` are:
 
 * Sending of INFO messages is spread out over time, preventing message peaks which might cause
   packet loss. This is especially important in large clusters.
-* Only 1 merge should be running at any time. Competing merges, as happening with `MERGE2`, slow
-  down the merge process, and don't scale to large clusters.
-* An INFO message carries the logical name and physical address of a member. Compared to `MERGE2`,
-  this allows us to immediately send messages to newly merged members, and not have to solicit
-  this information first.
+* Only 1 merge should be running at any time. There are no competing merges going on.
+* An INFO message carries the logical name and physical address of a member. This allows members to update their
+  logical/physical address caches.
 * On the downside, `MERGE3` has constant (small) traffic by all members.
 * `MERGE3` was written for an IP multicast capable transport (`UDP`), but it also works with other
   transports (such as `TCP`), although it isn't as efficient on `TCP` as on `UDP`.
@@ -919,121 +1190,53 @@ ${VERIFY_SUSPECT}
 
 === Reliable message transmission
 
-[[NAKACK]]
+[[NAKACK2]]
+==== NAKACK2
+NAKACK2 provides reliable delivery and FIFO (= First In First Out) properties for messages sent to all
+nodes in a cluster.
 
+It performs lossless and FIFO delivery of multicast messages, using negative acks. E.g. when
+receiving P:1, P:3, P:4, a receiver delivers only P:1, and asks P for retransmission of message 2,
+queuing P3-4. When P2 is finally received, the receiver will deliver P2-4 to the application.
 
-==== pbcast.NAKACK
+Reliable delivery means that no message sent by a sender will ever be lost, as all messages are numbered with sequence
+numbers (by sender) and retransmission requests are sent to the sender of a message if that sequence number is not received.
 
-NAKACK provides reliable delivery and FIFO (= First In First Out) properties for messages sent to all
-                nodes in a cluster.
-            
-
-Reliable delivery means that no message sent by a sender will ever be lost, as all messages are
-numbered with sequence numbers (by sender) and retransmission requests are sent to the sender of
-a message if that sequence number is not received.
-
-NOTE: Note that NAKACK can also be configured to send retransmission requests for M to _anyone_ in the cluster,
+NOTE: Note that NAKACK2 can also be configured to send retransmission requests for M to _anyone_ in the cluster,
      rather than only to the sender of M.
 
-
-FIFO order means that all messages from a given sender are received in exactly the order in which
-                they were sent.
-            
-
-NAKACK is a Lossless and FIFO delivery of multicast messages, using negative acks. E.g. when
-                receiving P:1, P:3, P:4, a receiver delivers only P:1, and asks P for retransmission of message 2,
-                queuing P3-4. When P2 is finally received, the receiver will deliver P2-4 to the application.
-            
-
-${NAKACK}
-
-[[NAKACK2]]
-
-
-==== NAKACK2
-
-NAKACK2 was introduced in 3.1 and is a successor to NAKACK (at some point it will replace NAKACK). It
-                has the same properties as NAKACK, but its implementation is faster and uses less memory, plus it
-                creates fewer tasks in the timer.
-            
-
-Some of the properties of NAKACK were deprecated in NAKACK2, but were not removed so people can simply
-                change from NAKACK to NAKACK2 by changing the protocol name in the config.
-            
+FIFO order means that all messages from a given sender are received in exactly the order in which they were sent.
 
 ${NAKACK2}
 
-[[UNICAST]]
 
-
-==== UNICAST
-
-UNICAST provides reliable delivery and FIFO (= First In First Out) properties for point-to-point
-                messages between one sender and one receiver.
-            
-
-Reliable delivery means that no message sent by a sender will ever be lost, as all messages are
-                numbered with sequence numbers (by sender) and retransmission requests are sent to the sender of
-                a message if that sequence number is not received.
-            
-
-FIFO order means that all messages from a given sender are received in exactly the order in which
-                they were sent.
-            
-
-UNICAST uses _positive acks_ for retransmission; sender A keeps sending
-                message M until receiver B delivers M and sends an ack(M) to A, or until B leaves the cluster or A
-                crashes.
-            
-
-Although JGroups attempts to send acks selectively, UNICAST will still see a lot of acks on the wire.
-                If this is not desired, use UNICAST2 (see <<UNICAST2>>).
-            
-
-On top of a reliable transport, such as TCP, UNICAST is not really needed. However, concurrent
-                delivery of messages from the same sender is prevented by UNICAST by acquiring a lock on the sender's
-                retransmission table, so unless concurrent delivery is desired, UNICAST should not be removed from
-                the stack even if TCP is used.
-            
-
-${UNICAST}
-
-[[UNICAST2]]
-
-
-==== UNICAST2
-
-UNICAST2 provides lossless, ordered, communication between 2 members. Contrary to UNICAST, it
-                uses _negative acks_ (similar to NAKACK) rather than positive acks. This reduces the communication
-                overhead required for sending an ack for every message.
-            
-
-Negative acks have sender A simply send messages without retransmission, and receivers never ack
-                messages, until they detect a gap: for instance, if A sends messages 1,2,4,5, then B delivers 1 and 2,
-                but queues 4 and 5 because it is missing message 3 from A. B then asks A to retransmit 3. When 3 is
-                received, messages 3, 4 and 5 can be delivered to the application.
-            
-
-Compared to a positive ack scheme as used in UNICAST, negative acks have the advantage that they generate
-                less traffic: if all messages are received in order, we never need to do retransmission.
-            
-
-${UNICAST2}
 
 [[UNICAST3]]
+==== UNICAST2
 
+UNICAST3 provides reliable delivery and FIFO (= First In First Out) properties for point-to-point
+messages between a sender and a receiver.
 
-==== UNICAST3
+Reliable delivery means that no message sent by a sender will ever be lost, as all messages are
+numbered with sequence numbers (by sender) and retransmission requests are sent to the sender of
+a message if that sequence number is not received. UNICAST3 uses a mixture of positive and negative acks (similar to
+NAKACK2). This reduces the communication overhead required for sending an ack for every message.
 
-UNICAST3 (available in 3.3) is the successor to UNICAST2, but is based on UNICAST, as it uses a
-                positive acknowledgment mechanism. However, speed wise it is similar to UNICAST2
-            
+FIFO order means that all messages from a given sender are received in exactly the order in which
+they were sent.
+
+On top of a reliable transport, such as TCP, UNICAST3 is not really needed. However, concurrent
+delivery of messages from the same sender is prevented by UNICAST3 by acquiring a lock on the sender's
+retransmission table, so unless concurrent delivery is desired, UNICAST3 should not be removed from
+the stack even if TCP is used.
 
 Details of UNICAST3's design can be found here:
-                link:$$https://github.com/belaban/JGroups/blob/master/doc/design/UNICAST3.txt$$[UNICAST3]
-            
+link:$$https://github.com/belaban/JGroups/blob/master/doc/design/UNICAST3.txt$$[UNICAST3]
 
 ${UNICAST3}
+
+
+
 
 [[RSVP]]
 
@@ -1161,53 +1364,40 @@ this problem ? There are two solutions:
 === Flow control
 
 Flow control takes care of adjusting the rate of a message sender to the rate of the slowest receiver over time.
-            If a sender continuously sends messages at a rate that is faster than the receiver(s), the receivers will
-            either queue up messages, or the messages will get discarded by the receiver(s), triggering costly
-            retransmissions. In addition, there is spurious traffic on the cluster, causing even more retransmissions.
-        
+If a sender continuously sends messages at a rate that is faster than the receiver(s), the receivers will
+either queue up messages, or the messages will get discarded by the receiver(s), triggering costly
+retransmissions. In addition, there is spurious traffic on the cluster, causing even more retransmissions.
 
 Flow control throttles the sender so the receivers are not overrun with messages.
-        
+
+This is implemented through a credit based system, where each sender has `max_credits` credits and decrements
+them whenever a message is sent. The sender blocks when the credits fall below 0, and only resumes
+sending messages when it receives a replenishment message from the receivers.
+
+The receivers maintain a table of credits for all senders and decrement the given sender's credits
+as well, when a message is received.
+
+When a sender's credits drops below a threshold, the receiver will send a replenishment message to
+the sender. The threshold is defined by `min_bytes` or `min_threshold`.
 
 Note that flow control can be bypassed by setting message flag Message.NO_FC. See <<MessageFlags>>
             for details.
-        
 
-The properties for FlowControl are shown below and can be used in
-            MFC and UFC:
+
+The properties for FlowControl are shown below and can be used in `MFC` and `UFC`:
         
 
 ${FlowControl}
 
 
-
-==== FC
-
-FC uses a credit based system, where each sender has +$$max_credits$$+ credits and decrements
-                them whenever a message is sent. The sender blocks when the credits fall below 0, and only resumes
-                sending messages when it receives a replenishment message from the receivers.
-            
-
-The receivers maintain a table of credits for all senders and decrement the given sender's credits
-                as well, when a message is received.
-            
-
-When a sender's credits drops below a threshold, the receiver will send a replenishment message to
-                the sender. The threshold is defined by +$$min_bytes$$+ or +$$min_threshold$$+.
-            
-
-${FC}
-
-
-NOTE: FC has been deprecated, use MFC and UFC instead
-
-
 ==== MFC and UFC
 
-In 2.10, FC was separated into MFC (Multicast Flow Control) and Unicast Flow Control (UFC). The reason
-                was that multicast flow control should not be impeded by unicast flow control, and vice versa. Also,
-                performance for the separate implementations could be increased, plus they can be individually omitted.
-                For example, if no unicast flow control is needed, UFC can be left out of the stack configuration.
+NOTE: Flow control is implemented with MFC (Multicast Flow Control) and Unicast Flow Control (UFC). The reason
+for 2 separate protocols (which have a common superclass `FlowControl`) is that multicast flow control should not be
+impeded by unicast flow control, and vice versa. Also, performance for the separate implementations could be increased,
+plus they can be individually omitted.
+
+For example, if no unicast flow control is needed, UFC can be left out of the stack configuration.
             
 
 [[MFC]]
@@ -1215,8 +1405,7 @@ In 2.10, FC was separated into MFC (Multicast Flow Control) and Unicast Flow Con
 
 ===== MFC
 
-MFC has currently no properties other than those inherited by
-                    FlowControl (see above).
+MFC has currently no properties other than those inherited by FlowControl (see above).
                 
 
 ${MFC}
@@ -1226,8 +1415,7 @@ ${MFC}
 
 ===== UFC
 
-UFC has currently no properties other than those inherited by
-                    FlowControl (see above).
+UFC has currently no properties other than those inherited by FlowControl (see above).
                 
 
 ${UFC}
@@ -1261,8 +1449,10 @@ Contrary to FRAG, FRAG2 does not need to serialize a message in order to break i
                 serialize the message, so we add a constant (by default 200 bytes). Because of the efficiency gained by
                 not having to serialize the message just to determine its size, FRAG2 is generally recommended over FRAG.
             
+${FRAG3}
 
-
+FRAG2 needs only half the memory than FRAG2 to handle fragments and the final full message. See
+https://issues.jboss.org/browse/JGRP-2154 for details.
 
 === Ordering
 
@@ -1487,149 +1677,178 @@ Read more about flushing in <<Flushing>>.
 
 ${FLUSH}
 
-[[Misc]]
-
-
-=== Misc
-
-[[STATS]]
-
-
-==== Statistics
-
-STATS exposes various statistics, e.g. number of received multicast and unicast messages, number of
-                bytes sent etc. It should be placed directly over the transport
-            
-
-${STATS}
 
 [[Security]]
+=== Security
+
+Security is used to prevent (1) non-authorized nodes being able to join a cluster and (2) non-members being
+able to communicate with cluster members.
+
+(1) is handled by AUTH or SASL which allows only authenticated nodes to join a cluster.
+
+(2) is handled by the encryption protocol (SYM_ENCRYPT or ASYM_ENCRYPT) which encrypts messages between cluster
+members such that a non-member cannot understand them.
 
 
-==== Security
-
-JGroups provides protocols to encrypt cluster traffic (ENCRYPT), and to make sure that only
-                authorized members can join a cluster (AUTH and SASL).
-            
 
 [[ENCRYPT]]
+==== Encryption
 
+Encryption is based on a shared secret key that all members of a cluster have. The key is either acquired from a shared
+keystore (symmetric encryption) or a new joiner fetches it from the coordinator via public/private key exchange
+(asymmetric encryption).
 
-===== ENCRYPT
+A sender encrypts a message with the shared secret key and the receivers decrypt it with the same secret key.
 
-A detailed description of ENCRYPT is found in the JGroups source (__JGroups/doc/ENCRYPT.html__).
-Encryption by default only encrypts the message body, but doesn't encrypt message headers.
-To encrypt the entire message (including all headers, plus destination and source addresses),
-the property ++$$encrypt_entire_message$$++ has to be set to true.
-Also, ENCRYPT has to be below any protocols whose headers we want to encrypt, e.g.
+By default, the entire message (including the headers) is encrypted, but it is also possible to only encrypt the payload
+(this is configurable). If the headers are not encrypted, it is possible to use replay attacks, because the
+sequence numbers (seqnos) of a message are seen. For example, if a seqno is 50, then an attacker might copy the message,
+and increment the seqno. This is prevented by copying and _signing_ the message.
 
+A message can be signed, which is a hash over the encrypted message, encrypted with the secret key. If the hash shipped
+with a message doesn't match the hash computed over the received message, the message will be discarded by a receiver,
+and no attempt is made to decrypt it.
 
-[source,xml]
-----
-<config ... >
-    <UDP />
-    <PING />
-    <MERGE2 />
-    <FD />
-    <VERIFY_SUSPECT />
-    <pbcast.NAKACK />
-    <UNICAST />
-    <pbcast.STABLE />
-    <FRAG2 />
-    <pbcast.GMS />
-    <ENCRYPT encrypt_entire_message="false"
-             sym_init="128" sym_algorithm="AES/ECB/PKCS5Padding"
-             asym_init="512" asym_algorithm="RSA"/>
-</config>
-----
+The cost of encrypting the entire message includes serializing the entire message (including headers, flags, destination
+address etc) and encrypting it into the buffer of a new message (to the same destination). If message signing is enabled,
+the cost of computing a hashcode and encrypting it is added to the above cost.
 
-Note that ENCRYPT sits below NAKACK and UNICAST, so the sequence numbers for these 2 protocols will
-                    be encrypted. Had ENCRYPT been placed below UNICAST but above NAKACK, then only UNICAST's headers
-                    (including sequence numbers) would have been encrypted, but not NAKACKs.
-                
+Attributes present in both symmetric and asymmetric encryption include `sign_msgs` and `encrypt_entire_message`.
 
-Note that it doesn't make too much sense to place ENCRYPT even lower in the stack, because then
-                    almost all traffic (even merge or discovery traffic) will be encrypted, which may be somewhat of
-                    a performance drag.
-                    
+[[SYM_ENCRYPT]]
+===== SYM_ENCRYPT
 
-When we encrypt an entire message, we have to marshal the message into a byte buffer first and
-                    then encrypt it. This entails marshalling and copying of the byte buffer, which is not so good
-                    performance wise...
-                
+This is done by SYM_ENCRYPT. The configuration includes mainly attributes that define the keystore, e.g. `keystore_name`
+(name of the keystore, needs to be found on the classpath), `store_password`, `key_password` and `alias`.
 
-
-
-.Using a key store
-ENCRYPT uses store type JCEKS (for details between JKS and JCEKS see here), however
-                        +keytool+ uses JKS, therefore a keystore generated with keytool will not be accessible.
-                    
+SYM_ENCRYPT uses store type JCEKS (for details between JKS and JCEKS see here), however `keytool` uses JKS, therefore
+a keystore generated with keytool will not be accessible.
 
 To generate a keystore compatible with JCEKS, use the following command line options to keytool:
-                    
-
 
 ----
-
 keytool -genseckey -alias myKey -keypass changeit -storepass changeit  -keyalg Blowfish -keysize 56 -keystore defaultStore.keystore -storetype  JCEKS
-                    
 ----
 
-ENCRYPT could then be configured as follows:
-                    
+SYM_ENCRYPT could then be configured as follows:
+
 
 
 [source,xml]
 ----
-
-<ENCRYPT key_store_name="defaultStore.keystore"
-         store_password="changeit"
-         alias="myKey"/>
-                    
+<SYM_ENCRYPT sym_algorithm="AES"
+             encrypt_entire_message="true"
+             key_store_name="defaultStore.keystore"
+             store_password="changeit"
+             alias="myKey"/>
 ----
 
 Note that defaultStore.keystore will have to be found in the claspath.
-                    
+
+NOTE: Both SYM_ENCRYPT and ASYM_ENCRYPT should be placed directly under NAKACK2
+(see link:https://github.com/belaban/JGroups/tree/master/conf[sample configurations], e.g. sym-encrypt.xml or
+asym-encrypt.xml).
 
 
-NOTE: If asymmetric encryption is used (no shared key via keystore), ENCRYPT has to be placed somewhere _above_ GMS,
-      or else the JOIN process would not function (as the JOIN response would get dropped).
+${SYM_ENCRYPT}
 
-${ENCRYPT}
+
+
+[[ASYM_ENCRYPT]]
+===== ASYM_ENCRYPT
+Contrary to SYM_ENCRYPT, the secret key is not fetched from a shared keystore, but from the current coordinator C. After
+new member P joined the cluster (passing the join check done by AUTH), P sends a request to get the secret key
+(including P's public key) to C.
+
+C then sends the secret key back to P, encrypted with P's public key, and P decrypts it with its private key
+and installs it. From then on, P encrypts and decrypts messages using the secret key.
+
+When a member leaves, C can optionally (based on `change_key_on_leave`) create a new secret key, and every cluster member
+needs to fetch it again, using the public/private key exchange described above.
+
+A stack configured to use asymmetric encryption could look like this:
+[source,xml]
+----
+    ...
+    <VERIFY_SUSPECT/>
+    <ASYM_ENCRYPT encrypt_entire_message="true"
+             sym_keylength="128"
+             sym_algorithm="AES/ECB/PKCS5Padding"
+             asym_keylength="512"
+             asym_algorithm="RSA"/>
+
+    <pbcast.NAKACK2/>
+    <UNICAST3/>
+    <pbcast.STABLE/>
+    <FRAG2/>
+    <AUTH auth_class="org.jgroups.auth.MD5Token"
+          auth_value="chris"
+          token_hash="MD5"/>
+    <pbcast.GMS join_timeout="2000" />
+----
+
+The configuration snippet shows ASYM_ENCRYPT positioned just below NAKACK2, so that headers of the important
+retransmission protocols NAKACK2 and UNICAST3 are encrypted, too. Note that AUTH should be part of the configuration, or
+else unauthenticated nodes would be able to acquire the secret key from the coordinator.
+
+${ASYM_ENCRYPT}
+
+
+
+
 
 [[AUTH]]
+==== AUTH
+Authentication is performed by AUTH. Its main use is to make sure only authenticated members can join a cluster.
+Other scenarios where a check is performed are:
 
+* Merging: make sure only authenticated members can merge into a new cluster
+* View installation (if enabled): views and merge views can only be installed by authenticated members
 
-===== AUTH
+So authentication makes sure that rogue nodes will never be able to be members of a cluster, be it via joining or
+merging. Note that while AUTH is optional with SYM_ENCRYPT, it is required by ASYM_ENCRYPT: there's a sanity check that
+will prevent a member to start if ASYM_ENCRYPT is present but AUTH is absent.
 
-AUTH is used to provide a layer of authentication to JGroups.  This allows you to define pluggable
-                    security that defines if a node should be allowed to join a cluster.  AUTH sits below the GMS
-                    protocol and listens for JOIN REQUEST messages.  When a JOIN REQUEST is received it tries to find
-                    an AuthHeader object, inside of which should be an implementation of the AuthToken object.
-                
+AUTH provides pluggable security that defines if a node should be allowed to join a cluster.
+AUTH sits below the GMS protocol and listens for JOIN REQUEST messages.  When a JOIN REQUEST is received it tries to find
+an AuthHeader object, inside of which should be an implementation of the AuthToken object.
 
 AuthToken is an abstract class, implementations of which are responsible for providing the
-                    actual authentication mechanism.  Some basic implementations of AuthToken are provide in the
-                    org.jgroups.auth package (SimpleToken, MD5Token and X509Token).  Effectivly all these implementations
-                    do is encrypt a string (found in the jgroups config) and pass that on the JOIN REQUEST.
-                
+actual authentication mechanism.  Some basic implementations of AuthToken are provide in the
+org.jgroups.auth package (SimpleToken, MD5Token and X509Token).  Effectivly all these implementations
+do is encrypt a string (found in the jgroups config) and pass that on the JOIN REQUEST.
 
 When authentication is successful, the message is simply passed up the stack to the GMS protocol.
-                    When it fails, the AUTH protocol creates a JOIN RESPONSE message with a failure string and passes
-                    it back down the stack.  This failure string informs the client of the reason for failure.
-                    Clients will then fail to join the group and will throw a SecurityException.
-                    If this error string is null then authentication is considered to have passed.
-                
+When it fails, the AUTH protocol creates a JOIN RESPONSE message with a failure string and passes
+it back down the stack.  This failure string informs the client of the reason for failure.
+Clients will then fail to join the group and will throw a SecurityException.
+If this error string is null then authentication is considered to have passed.
 
 For more information refer to the wiki at http://community.jboss.org/wiki/JGroupsAUTH[AUTH].
-                
 
 ${AUTH}
+
+===== AuthToken implementations
+
+The AuthToken implememntations are listed below. Check the javadoc for details.
+
+[align="left",width="90%",cols="2,10",options="header"]
+|=================
+|Name|Description
+|SimpleToken | Uses a simple string (password) which is shared, and sent along with the authentication request
+| FixedMembershipToken | A fixed list of IP address:port pairs. If the requester is not in this list, authentication fails
+| RegexpMembership| Uses a regular expression to match against IP address or hostname
+| Krb5Token | Uses Kerberos for authentication
+| MD5Token | Uses an MD5 hash of a simple string (similar to SimpleString above, but hashed instead of plaintext)
+| X509Token | Uses a shared X.509 certificate
+| ChallengeResponseToken | Uses a challenge-response mechanism
+|=================
+
 
 [[SASL]]
 
 
-===== SASL
+==== SASL
 
 SASL is an alternative to the AUTH protocol which provides a layer of authentication to JGroups by allowing the
                     use of one of the SASL mechanisms made available by the JDK. SASL sits below the GMS
@@ -1638,17 +1857,17 @@ SASL is an alternative to the AUTH protocol which provides a layer of authentica
                     of challenge/response messages which, if successful, culminates in allowing the new node to join the cluster. The actual
                     validation logic required by the SASL mech must be provided by the user in the form of a standard javax.security.auth.CallbackHandler
                     implementation.
-                
+
 
 When authentication is successful, the message is simply passed up the stack to the GMS protocol.
                     When it fails, the SASL protocol creates a JOIN / MERGE RESPONSE message with a failure string and passes
                     it back down the stack.  This failure string informs the client of the reason for failure.
                     Clients will then fail to join the group and will throw a SecurityException.
                     If this error string is null then authentication is considered to have passed.
-                
+
 
 SASL can be (minimally) configured as follows:
-                
+
 
 
 [source,xml]
@@ -1660,19 +1879,19 @@ SASL can be (minimally) configured as follows:
     <pbcast.NAKACK />
     <UNICAST3 />
     <pbcast.STABLE />
-    <SASL mech="DIGEST-MD5" 
-        client_callback_handler="org.example.ClientCallbackHandler" 
+    <SASL mech="DIGEST-MD5"
+        client_callback_handler="org.example.ClientCallbackHandler"
         server_callback_handler="org.example.ServerCallbackHandler"/>
     <pbcast.GMS />
-    
+
 </config>
-                
+
 ----
 
 The +mech+ property specifies the SASL mech you want to use, as defined by RFC-4422. You will also need to provide two
-                    callback handlers, one used when the node is running as coordinator (++$$server_callback_handler$$++) and one used in all other 
-                    cases (++$$client_callback_handler$$++). Refer to the JDK's SASL reference guide for more details: link:$$http://docs.oracle.com/javase/7/docs/technotes/guides/security/sasl/sasl-refguide.html$$[] 
-                
+                    callback handlers, one used when the node is running as coordinator (++$$server_callback_handler$$++) and one used in all other
+                    cases (++$$client_callback_handler$$++). Refer to the JDK's SASL reference guide for more details: link:$$http://docs.oracle.com/javase/7/docs/technotes/guides/security/sasl/sasl-refguide.html$$[]
+
 The JGroups package comes with a simple properties-based CallbackHandler which can be used when a more complex Kerberos/LDAP approach is not needed. To use this set both the (++$$server_callback_handler$$++) and
                     the (++$$client_callback_handler$$++) to org.jgroups.auth.sasl.SimpleAuthorizingCallbackHandler. This CallbackHandler can be configured either programmatically by passing to the constructor an
                     instance of java.util.Properties containing the appropriate properties, or via standard Java system properties (i.e. set on the command-line using the -DpropertyName=propertyValue notation.
@@ -1686,53 +1905,49 @@ The JGroups package comes with a simple properties-based CallbackHandler which c
 
 ${SASL}
 
+
+
+
+
+[[Misc]]
+=== Misc
+
+[[STATS]]
+==== Statistics
+
+STATS exposes various statistics, e.g. number of received multicast and unicast messages, number of
+                bytes sent etc. It should be placed directly over the transport
+            
+
+${STATS}
+
+
+
 [[COMPRESS]]
 
 
 ==== COMPRESS
 
 COMPRESS compresses messages larger than +$$min_size$$+, and uncompresses them at the
-                receiver's side. Property +$$compression_level$$+ determines how thorough the
-                compression algorith should be (0: no compression, 9: highest compression).
+receiver's side. Property +$$compression_level$$+ determines how thorough the
+compression algorith should be (0: no compression, 9: highest compression).
             
 
 ${COMPRESS}
 
-[[SCOPE]]
 
+==== NAMING
+If <<IpAddressUUID,IpAddressUUIDs>> are used, then the address/logical_name cache may not be populated for all members.
+Note that this doesn't affect correctness, but instead of logical names, the real IP addresses of some members will
+be printed (e.g. in debug logs).
 
-==== SCOPE
+To prevent this, `NAMING` can be added to the stack. The typical location is somewhere towards the bottom of the stack,
+e.g. above the discovery protocol (e.g. `PING`).
 
-As discussed in <<Scopes>>, the SCOPE protocol is used to deliver updates
-                to different scopes concurrently. It has to be placed somewhere above UNICAST and NAKACK.
-            
+NOTE: `NAMING` is only needed when `TP.use_ip_addrs` is true.
 
-SCOPE has a separate thread pool. The reason why the default thread pool from the transport wasn't used
-                is that the default thread pool has a different purpose. For example, it can use a queue to which all
-                incoming messages are added, which would defy the purpose of concurrent delivery in SCOPE. As a matter
-                of fact, using a queue would most likely delay messages get sent up into SCOPE!
-            
+${NAMING}
 
-Also, the default pool's rejection policy might not be "run", so the SCOPE implementation would have
-                to catch rejection exceptions and engage in a retry protocol, which is complex and wastes resources.
-            
-
-The configuration of the thread pool is shown below. If you expect _concurrent_
-                messages to N _different_ scopes, then the max pool size would ideally be set
-                to N. However, in most cases, this is not necessary as (a) the messages might not be to different
-                scopes or (b) not all N scopes might get messages at the same time. So even if the max pool size is a
-                bit smaller, the cost of this is slight delays, in the sense that a message for scope Y might wait until
-                the thread processing message for scope X is available.
-            
-
-To remove unused scopes, an expiry policy is provided: expiration_time is the number of milliseconds
-                after which an idle scope is removed. An idle scope is a scope which hasn't seen any messages for
-                expiration_time milliseconds. The expiration_interval value defines the number of milliseconds at
-                which the expiry task runs. Setting both values to 0 disables expiration; it would then have to be
-                done manually (see <<Scopes>> for details).
-            
-
-${SCOPE}
 
 [[RELAY]]
 
@@ -1790,62 +2005,28 @@ ${RATE_LIMITER}
 [[LockingProtocols]]
 ==== Locking protocols
 
-There are currently 2 locking protocols: org.jgroups.protocols.CENTRAL_LOCK and
-                org.jgroups.protocols.PEER_LOCK. Both extend Locking, which has the
-                following properties:
-            
+The locking protocol is org.jgroups.protocols.CENTRAL_LOCK:
 
 ${Locking}
 
 [[CENTRAL_LOCK]]
-
-
 ===== CENTRAL_LOCK
 
-CENTRAL_LOCK has the current coordinator of a cluster grants locks, so every node has to communicate
-                    with the coordinator to acquire or release a lock. Lock requests by different nodes for the same lock
-                    are processed in the order in which they are received.
-                
+CENTRAL_LOCK has the current coordinator of a cluster grants locks, so every node has to communicate with the
+coordinator to acquire or release a lock. Lock requests by different nodes for the same lock are processed
+in the order in which they are received.
 
-A coordinator maintains a lock table. To prevent losing the knowledge of who holds which locks, the
-                    coordinator can push lock information to a number of backups defined by num_backups. If num_backups
-                    is 0, no replication of lock information happens. If num_backups is greater than 0, then the coordinator
-                    pushes information about acquired and released locks to all backup nodes. Topology changes might
-                    create new backup nodes, and lock information is pushed to those on becoming a new backup node.
-                
+A coordinator maintains a lock table. To prevent losing the knowledge of who holds which locks, the coordinator can push
+lock information to a number of backups defined by num_backups. If num_backups is 0, no replication of lock information
+happens. If num_backups is greater than 0, then the coordinator pushes information about acquired and released locks to
+all backup nodes. Topology changes might create new backup nodes, and lock information is pushed to those on
+becoming a new backup node.
 
-The advantage of CENTRAL_LOCK is that all lock requests are granted in the same order across
-                    the cluster, which is not the case with PEER_LOCK.
-                
+The advantage of CENTRAL_LOCK is that all lock requests are granted in the same order across the cluster.
 
 ${CENTRAL_LOCK}
 
-[[PEER_LOCK]]
 
-
-===== PEER_LOCK
-
-PEER_LOCK acquires a lock by contacting all cluster nodes, and lock acquisition is only successful
-                    if all non-faulty cluster nodes (peers) grant it.
-                
-
-Unless a total order configuration is used (e.g. org.jgroups.protocols.SEQUENCER based), lock
-                    requests for the same resource from different senders may be received in different order, so
-                    deadlocks can occur. Example:
-                   
-* Nodes A and B
-* A and B call lock(X) at the same time
-* A receives L(X,A) followed by L(X,B): locks X(A), queues L(X,B)
-* B receives L(X,B) followed by L(X,A): locks X(B), queues L(X,A)
-                
-
-To acquire a lock, we need lock grants from both A and B, but this will never happen here.
-                    To fix this, either add SEQUENCER to the configuration, so that all lock requests are received in
-                    the same global order at both A and B, or use
-                    java.util.concurrent.locks.Lock.tryLock(long,javaTimeUnit) with retries if a lock cannot be acquired.
-                
-
-${PEER_LOCK}
 
 [[CENTRAL_EXECUTOR]]
 

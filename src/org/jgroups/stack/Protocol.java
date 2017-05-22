@@ -4,13 +4,11 @@ package org.jgroups.stack;
 
 
 import org.jgroups.Event;
-import org.jgroups.Message;
 import org.jgroups.JChannel;
-import org.jgroups.annotations.ManagedAttribute;
+import org.jgroups.Message;
 import org.jgroups.annotations.ManagedOperation;
 import org.jgroups.annotations.Property;
 import org.jgroups.conf.ClassConfigurator;
-import org.jgroups.jmx.ResourceDMBean;
 import org.jgroups.logging.Log;
 import org.jgroups.logging.LogFactory;
 import org.jgroups.protocols.TP;
@@ -21,8 +19,9 @@ import org.jgroups.util.Util;
 import org.w3c.dom.Node;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
 
 
 /**
@@ -47,17 +46,11 @@ public abstract class Protocol {
     protected Protocol         up_prot, down_prot;
     protected ProtocolStack    stack;
     
-    @Property(description="Determines whether to collect statistics (and expose them via JMX). Default is true",writable=true)
+    @Property(description="Determines whether to collect statistics (and expose them via JMX). Default is true")
     protected boolean          stats=true;
 
     @Property(description="Enables ergonomics: dynamically find the best values for properties at runtime")
     protected boolean          ergonomics=true;
-
-    /** The name of the protocol. Is by default set to the protocol's classname. This property should rarely need to
-     * be set, e.g. only in cases where we want to create more than 1 protocol of the same class in the same stack */
-    @Property(name="name",description="Give the protocol a different name if needed so we can have multiple " +
-            "instances of it in the same stack (also change ID)",writable=false)
-    protected String           name=getClass().getSimpleName();
 
     @Property(description="Fully qualified name of a class implementing ProtocolHook, will be called after creation of " +
       "the protocol (before init())",writable=false)
@@ -73,29 +66,30 @@ public abstract class Protocol {
 
 
     /**
-     * Sets the level of a logger. This method is used to dynamically change the logging level of a
-     * running system, e.g. via JMX. The appender of a level needs to exist.
+     * Sets the level of a logger. This method is used to dynamically change the logging level of a running system,
+     * e.g. via JMX. The appender of a level needs to exist.
      * @param level The new level. Valid values are "fatal", "error", "warn", "info", "debug", "trace"
      * (capitalization not relevant)
      */
-    public Protocol      setLevel(String level)            {log.setLevel(level); return this;}
+    public <T extends Protocol> T  setLevel(String level)            {log.setLevel(level); return (T)this;}
     @Property(name="level", description="logger level (see javadocs)")
-    public String        getLevel()                        {return log.getLevel();}
-    public Protocol      level(String level)               {this.log.setLevel(level); return this;}
-    public boolean       isErgonomics()                    {return ergonomics;}
-    public Protocol      setErgonomics(boolean ergonomics) {this.ergonomics=ergonomics; return this;}
-    public ProtocolStack getProtocolStack()                {return stack;}
-    public boolean       statsEnabled()                    {return stats;}
-    public void          enableStats(boolean flag)         {stats=flag;}
-    public String        getName()                         {return name;}
-    public short         getId()                           {return id;}
-    public Protocol      setId(short id)                   {this.id=id; return this;}
-    public Protocol      getUpProtocol()                   {return up_prot;}
-    public Protocol      getDownProtocol()                 {return down_prot;}
-    public Protocol      setUpProtocol(Protocol prot)      {this.up_prot=prot; return this;}
-    public Protocol      setDownProtocol(Protocol prot)    {this.down_prot=prot; return this;}
-    public Protocol      setProtocolStack(ProtocolStack s) {this.stack=s; return this;}
-    public String        afterCreationHook()               {return after_creation_hook;}
+    public String                  getLevel()                        {return log.getLevel();}
+    public <T extends Protocol> T  level(String level)               {return setLevel(level);}
+    public boolean                 isErgonomics()                    {return ergonomics;}
+    public <T extends Protocol> T  setErgonomics(boolean ergonomics) {this.ergonomics=ergonomics; return (T)this;}
+    public ProtocolStack           getProtocolStack()                {return stack;}
+    public boolean                 statsEnabled()                    {return stats;}
+    public void                    enableStats(boolean flag)         {stats=flag;}
+    public String                  getName()                         {return getClass().getSimpleName();}
+    public short                   getId()                           {return id;}
+    public <T extends Protocol> T  setId(short id)                   {this.id=id; return (T)this;}
+    public <T extends Protocol> T  getUpProtocol()                   {return (T)up_prot;}
+    public <T extends Protocol> T  getDownProtocol()                 {return (T)down_prot;}
+    public <T extends Protocol> T  setUpProtocol(Protocol prot)      {this.up_prot=prot; return (T)this;}
+    public <T extends Protocol> T  setDownProtocol(Protocol prot)    {this.down_prot=prot; return (T)this;}
+    public <T extends Protocol> T  setProtocolStack(ProtocolStack s) {this.stack=s; return (T)this;}
+    public String                  afterCreationHook()               {return after_creation_hook;}
+    public Log                     getLog()                          {return log;}
 
 
     public Object getValue(String name) {
@@ -104,20 +98,6 @@ public abstract class Protocol {
         if(field == null)
             throw new IllegalArgumentException("field \"" + name + "\n not found");
         return Util.getField(field, this);
-    }
-
-    public Protocol setValues(Map<String,Object> values) {
-        if(values == null)
-            return this;
-        for(Map.Entry<String,Object> entry: values.entrySet()) {
-            String attrname=entry.getKey();
-            Object value=entry.getValue();
-            Field field=Util.getField(getClass(), attrname);
-            if(field != null) {
-                Util.setField(field, this, value);
-            }
-        }
-        return this;
     }
 
 
@@ -211,71 +191,8 @@ public abstract class Protocol {
         ;
     }
 
-    public String printStats() {
-        return null;
-    }
-
-    public Map<String,Object> dumpStats() {
-        HashMap<String,Object> map=new HashMap<>();
-        for(Class<?> clazz=this.getClass();clazz != null;clazz=clazz.getSuperclass()) {
-            Field[] fields=clazz.getDeclaredFields();
-            for(Field field: fields) {
-                if(field.isAnnotationPresent(ManagedAttribute.class) ||
-                  (field.isAnnotationPresent(Property.class) && field.getAnnotation(Property.class).exposeAsManagedAttribute())) {
-
-                    ManagedAttribute attr_annotation=field.getAnnotation(ManagedAttribute.class);
-                    Property         prop=field.getAnnotation(Property.class);
-                    String attr_name=attr_annotation != null? attr_annotation.name() : prop != null? prop.name() : null;
-                    if(attr_name != null && !attr_name.trim().isEmpty())
-                        attr_name=attr_name.trim();
-                    else
-                        attr_name=field.getName();
-
-                    try {
-                        field.setAccessible(true);
-                        Object value=field.get(this);
-                        map.put(attr_name, value != null? value.toString() : null);
-                    }
-                    catch(Exception e) {
-                        log.warn("Could not retrieve value of attribute (field) " + attr_name, e);
-                    }
-                }
-            }
-
-            Method[] methods=this.getClass().getMethods();
-            for(Method method: methods) {
-                if(method.isAnnotationPresent(ManagedAttribute.class) ||
-                        (method.isAnnotationPresent(Property.class) && method.getAnnotation(Property.class).exposeAsManagedAttribute())) {
-
-                    ManagedAttribute attr_annotation=method.getAnnotation(ManagedAttribute.class);
-                    Property         prop=method.getAnnotation(Property.class);
-                    String method_name=attr_annotation != null? attr_annotation.name() : prop != null? prop.name() : null;
-                    if(method_name != null && !method_name.trim().isEmpty())
-                        method_name=method_name.trim();
-                    else {
-                        String field_name=Util.methodNameToAttributeName(method.getName());
-                        method_name=Util.attributeNameToMethodName(field_name);
-                    }
-
-                    if(ResourceDMBean.isGetMethod(method)) {
-                        try {
-                            Object value=method.invoke(this);
-                            String attributeName=Util.methodNameToAttributeName(method_name);
-                            map.put(attributeName, value != null? value.toString() : null);
-                        }
-                        catch(Exception e) {
-                            log.warn("Could not retrieve value of attribute (method) " + method_name,e);
-                        }
-                    }
-                }
-            }
-        }
-        return map;
-    }
-    
 
 
-    
     /**
      * Called after instance has been created (null constructor) and before protocol is started.
      * Properties are already set. Other protocols are not yet connected and events cannot yet be sent.
@@ -283,9 +200,6 @@ public abstract class Protocol {
      *                      ProtocolStack to fail, so the channel constructor will throw an exception
      */
     public void init() throws Exception {
-        short real_id=ClassConfigurator.getProtocolId(getClass());
-        if(real_id > 0 && id != real_id)
-            name=name+"-"+id;
     }
 
     /**
@@ -319,24 +233,17 @@ public abstract class Protocol {
 
 
     /** List of events that are required to be answered by some layer above */
-    public List<Integer> requiredUpServices() {
-        return null;
-    }
+    @SuppressWarnings("MethodMayBeStatic")
+    public List<Integer> requiredUpServices() {return null;}
 
     /** List of events that are required to be answered by some layer below */
-    public List<Integer> requiredDownServices() {
-        return null;
-    }
+    public List<Integer> requiredDownServices() {return null;}
 
     /** List of events that are provided to layers above (they will be handled when sent down from above) */
-    public List<Integer> providedUpServices() {
-        return null;
-    }
+    public List<Integer> providedUpServices() {return null;}
 
     /** List of events that are provided to layers below (they will be handled when sent down below) */
-    public List<Integer> providedDownServices() {
-        return null;
-    }
+    public List<Integer> providedDownServices() {return null;}
 
     /** Returns all services provided by protocols below the current protocol */
     public final List<Integer> getDownServices() {
@@ -365,32 +272,44 @@ public abstract class Protocol {
     }
 
 
+    /**
+     * An event is to be sent down the stack. A protocol may want to examine its type and perform some action on it,
+     * depending on the event's type. If the event is a message MSG, then the protocol may need to add a header to it
+     * (or do nothing at all) before sending it down the stack using {@code down_prot.down()}.
+     */
+    public Object down(Event evt) {
+        return down_prot.down(evt);
+    }
 
     /**
-     * An event was received from the layer below. Usually the current layer will want to examine
-     * the event type and - depending on its type - perform some computation
-     * (e.g. removing headers from a MSG event type, or updating the internal membership list
-     * when receiving a VIEW_CHANGE event).
-     * Finally the event is either a) discarded, or b) an event is sent down
-     * the stack using {@code down_prot.down()} or c) the event (or another event) is sent up
-     * the stack using {@code up_prot.up()}.
+     * A message is sent down the stack. Protocols may examine the message and do something (e.g. add a header) with it
+     * before passing it down.
+     * @since 4.0
+     */
+    public Object down(Message msg) {
+        return down_prot.down(msg);
+    }
+
+
+    /**
+     * An event was received from the protocol below. Usually the current protocol will want to examine the event type
+     * and - depending on its type - perform some computation (e.g. removing headers from a MSG event type, or updating
+     * the internal membership list when receiving a VIEW_CHANGE event).
+     * Finally the event is either a) discarded, or b) an event is sent down the stack using {@code down_prot.down()}
+     * or c) the event (or another event) is sent up the stack using {@code up_prot.up()}.
      */
     public Object up(Event evt) {
         return up_prot.up(evt);
     }
 
+
     /**
-     * Called by the default implementation of {@link #up(org.jgroups.util.MessageBatch)} for each message to determine
-     * if the message should be removed from the message batch (and handled by the current protocol) or not.
-     * @param msg The message. Guaranteed to be non-null
-     * @return True if the message should be handled by this protocol (will be removed from the batch), false if the
-     * message should remain in the batch and be passed up.<p/>
-     * The default implementation tries to find a header matching the current protocol's ID and returns true if there
-     * is a match, or false otherwise
+     * A single message was received. Protocols may examine the message and do something (e.g. add a header) with it
+     * before passing it up.
+     * @since 4.0
      */
-    protected boolean accept(Message msg) {
-        short tmp_id=getId();
-        return tmp_id > 0 && msg.getHeader(tmp_id) != null;
+    public Object up(Message msg) {
+        return up_prot.up(msg);
     }
 
 
@@ -414,7 +333,7 @@ public abstract class Protocol {
             if(msg != null && accept(msg)) {
                 it.remove();
                 try {
-                    up(new Event(Event.MSG, msg));
+                    up(msg);
                 }
                 catch(Throwable t) {
                     log.error(Util.getMessage("PassUpFailure"), t);
@@ -426,19 +345,19 @@ public abstract class Protocol {
     }
 
 
+
     /**
-     * An event is to be sent down the stack. The layer may want to examine its type and perform
-     * some action on it, depending on the event's type. If the event is a message MSG, then
-     * the layer may need to add a header to it (or do nothing at all) before sending it down
-     * the stack using {@code down_prot.down()}. In case of a GET_ADDRESS event (which tries to
-     * retrieve the stack's address from one of the bottom layers), the layer may need to send
-     * a new response event back up the stack using {@code up_prot.up()}.
+     * Called by the default implementation of {@link #up(org.jgroups.util.MessageBatch)} for each message to determine
+     * if the message should be removed from the message batch (and handled by the current protocol) or not.
+     * @param msg The message. Guaranteed to be non-null
+     * @return True if the message should be handled by this protocol (will be removed from the batch), false if the
+     * message should remain in the batch and be passed up.<p/>
+     * The default implementation tries to find a header matching the current protocol's ID and returns true if there
+     * is a match, or false otherwise
      */
-    public Object down(Event evt) {
-        return down_prot.down(evt);
+    protected boolean accept(Message msg) {
+        short tmp_id=getId();
+        return tmp_id > 0 && msg.getHeader(tmp_id) != null;
     }
-
-
-
 
 }

@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.Supplier;
 
 /**
  * The FORK protocol; multiplexes messages to different forks in a stack (https://issues.jboss.org/browse/JGRP-1613).
@@ -95,7 +96,7 @@ public class FORK extends Protocol {
     public Object down(Event evt) {
         switch(evt.getType()) {
             case Event.SET_LOCAL_ADDRESS:
-                local_addr=(Address)evt.getArg();
+                local_addr=evt.getArg();
                 break;
         }
         return down_prot.down(evt);
@@ -103,16 +104,6 @@ public class FORK extends Protocol {
 
     public Object up(Event evt) {
         switch(evt.getType()) {
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                ForkHeader hdr=(ForkHeader)msg.getHeader(id);
-                if(hdr == null)
-                    break;
-                if(hdr.fork_stack_id == null)
-                    throw new IllegalArgumentException("header has a null fork_stack_id");
-                Protocol bottom_prot=get(hdr.fork_stack_id);
-                return bottom_prot != null? bottom_prot.up(evt) : this.unknownForkHandler.handleUnknownForkStack(msg, hdr.fork_stack_id);
-
             case Event.VIEW_CHANGE:
                 for(Protocol bottom: fork_stacks.values())
                     bottom.up(evt);
@@ -127,17 +118,27 @@ public class FORK extends Protocol {
             case Event.STATE_TRANSFER_INPUTSTREAM:
                 if(!process_state_events)
                     break;
-                setStateInMainAndForkChannels((InputStream)evt.getArg());
+                setStateInMainAndForkChannels(evt.getArg());
                 return null;
         }
         return up_prot.up(evt);
+    }
+
+    public Object up(Message msg) {
+        ForkHeader hdr=msg.getHeader(id);
+        if(hdr == null)
+            return up_prot.up(msg);
+        if(hdr.fork_stack_id == null)
+            throw new IllegalArgumentException("header has a null fork_stack_id");
+        Protocol bottom_prot=get(hdr.fork_stack_id);
+        return bottom_prot != null? bottom_prot.up(msg) : this.unknownForkHandler.handleUnknownForkStack(msg, hdr.fork_stack_id);
     }
 
     public void up(MessageBatch batch) {
         // Sort fork messages by fork-stack-id
         Map<String,List<Message>> map=new HashMap<>();
         for(Message msg: batch) {
-            ForkHeader hdr=(ForkHeader)msg.getHeader(id);
+            ForkHeader hdr=msg.getHeader(id);
             if(hdr != null) {
                 batch.remove(msg);
                 List<Message> list=map.get(hdr.fork_stack_id);
@@ -171,7 +172,7 @@ public class FORK extends Protocol {
 
 
     protected void getStateFromMainAndForkChannels(Event evt) {
-        final OutputStream out=(OutputStream)evt.getArg();
+        final OutputStream out=evt.getArg();
 
         try(DataOutputStream dos=new DataOutputStream(out)) {
             getStateFrom(null, up_prot, null, null, dos);
@@ -350,6 +351,8 @@ public class FORK extends Protocol {
             this.fork_stack_id=fork_stack_id;
             this.fork_channel_id=fork_channel_id;
         }
+        public short getMagicId() {return 83;}
+        public Supplier<? extends Header> create() {return ForkHeader::new;}
 
         public String getForkStackId() {
             return fork_stack_id;
@@ -367,7 +370,7 @@ public class FORK extends Protocol {
             this.fork_channel_id=fork_channel_id;
         }
 
-        public int size() {return Util.size(fork_stack_id) + Util.size(fork_channel_id);}
+        public int serializedSize() {return Util.size(fork_stack_id) + Util.size(fork_channel_id);}
 
         public void writeTo(DataOutput out) throws Exception {
             Bits.writeString(fork_stack_id,out);

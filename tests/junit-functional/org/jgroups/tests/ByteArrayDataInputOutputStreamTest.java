@@ -122,14 +122,32 @@ public class ByteArrayDataInputOutputStreamTest {
         out=new ByteArrayDataOutputStream(1);
         out.writeBoolean(true);
         out.writeBoolean(false);
+        assert out.position() == 2;
 
         out=new ByteArrayDataOutputStream(1);
         out.writeShort(22);
         out.writeShort(23);
+        assert out.position() == 4;
 
         out=new ByteArrayDataOutputStream(1);
         out.writeInt(23);
         out.writeInt(24);
+        assert out.position() == 8;
+    }
+
+    public void testExpanding3() {
+        ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(1024);
+        out.writeInt(1);
+        assert out.position() == 4;
+        byte[] buf=new byte[1024];
+        out.write(buf);
+        System.out.println("out=" + out);
+        assert out.position() == 1028;
+
+        buf=new byte[512];
+        out.write(buf);
+        System.out.println("out = " + out);
+        assert out.position() == 1028+512;
     }
 
     public void testSkipBytes() {
@@ -311,7 +329,8 @@ public class ByteArrayDataInputOutputStreamTest {
             Bits.writeLongSequence(i, i + 100,out);
         ByteArrayDataInputStream in=new ByteArrayDataInputStream(out.buffer());
         for(long i: numbers) {
-            long[] seq=Bits.readLongSequence(in);
+            long[] seq={0,0};
+            Bits.readLongSequence(in, seq, 0);
             assert Arrays.equals(seq, new long[]{i, i+100});
         }
     }

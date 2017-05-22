@@ -1,9 +1,57 @@
 
 
-Release notes JGroups 3.6.7
+Release notes JGroups 4.0.0
 ===========================
 
 Author: Bela Ban
+
+
+
+API changes
+===========
+[https://issues.jboss.org/browse/JGRP-1605]
+
+- Fluent configuration. Example:
+  JChannel ch=new JChannel("config.xml").name("A").connect("cluster");
+- Removed deprecated classes and methods
+
+
+Remove support for plain string-based channel configuration
+[https://issues.jboss.org/browse/JGRP-2019]
+
+
+Use of Java 8 features
+----------------------
+[https://issues.jboss.org/browse/JGRP-2007]
+
+E.g. replace Condition with Predicate etc
+
+
+Removed classes
+---------------
+- Shared transport [https://issues.jboss.org/browse/JGRP-1844]
+- TCP_NIO
+- UNICAST, UNICAST2
+- NAKACK
+- PEER_LOCK
+- FD_PING
+- MERGE2
+- FC
+- SCOPE
+- MuxRpcDispatcher
+- ENCRYPT
+
+
+MessageDispatcher / RpcDispatcher changes
+-----------------------------------------
+- [https://issues.jboss.org/browse/JGRP-1620]
+- Use of CompletableFuture instead of NotifyingFuture
+
+TCP: remove send queues
+-----------------------
+[https://issues.jboss.org/browse/JGRP-1994]
+
+
 
 
 
@@ -12,12 +60,87 @@ New features
 ============
 
 
+Deliver message batches
+-----------------------
+[https://issues.jboss.org/browse/JGRP-2003]
 
-Interoperability between TCP and TCP_NIO2
------------------------------------------
-[https://issues.jboss.org/browse/JGRP-1952]
+Receiver (ReceiverAdapter) now has an additional callback receive(MessageBatch batch). This allows JGroups
+to pass an entire batch of messages to the application rather than passing them up one by one.
 
-This allows nodes that have TCP as transport to talk to nodes that have TCP_NIO2 as transport, and vice versa.
+
+Refactored ENCRYPT into SYM_ENCRYPT and ASYM_ENCRYPT
+----------------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2021]
+
+Plus fixed security issues in the refactored code. Removed ENCRYPT.
+
+
+Measure round-trip times for RPCs via probe
+-------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2049]
+
+Keys 'rpcs' and 'rpcs-details' dump information about average RTTs between individual cluster members
+
+
+Change message bundler at runtime
+---------------------------------
+[https://issues.jboss.org/browse/JGRP-2058]
+
+Message bundlers can be changed at runtime via probe. This is useful to see the effect of different
+bundlers on performance, even in the same test run.
+
+
+Probe
+-----
+
+- Sort attributes for better legibility: https://issues.jboss.org/browse/JGRP-2066
+- Removal of protocols via regular expressions
+
+
+DELIVERY_TIME: new protocol to measure delivery time in the application
+-----------------------------------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2101]
+
+Exposes stats via JMX and probe
+
+
+RELAY2: sticky site masters
+---------------------------
+[https://issues.jboss.org/browse/JGRP-2112]
+
+When we have multiple site masters, messages from the same member should always be handled by the same
+site master. This prevents reordering of messages at the receiver.
+
+
+Multiple elements in bind_addr
+------------------------------
+[https://issues.jboss.org/browse/JGRP-2113]
+
+E.g.
+
+<TCP
+    bind_addr="match-interface:eth2,10.5.5.5,match-interface:en*,127.0.0.1"
+    ...
+ />
+
+This tries to bind to eth2 first, then to 10.5.5.5, then to an interface that starts with en0, and
+finally to loopback.
+Useful when running in an environment where the IP addresses and/or interfaces are not known before.
+
+
+Multiple receiver threads in UDP
+--------------------------------
+[https://issues.jboss.org/browse/JGRP-2146]
+
+Multiple threads can receive (and process) messages from a datagram socket, preventing queue buildups.
+
+
+
+FRAG3
+-----
+[https://issues.jboss.org/browse/JGRP-2154]
+
+
 
 
 
@@ -25,114 +148,207 @@ Optimizations
 =============
 
 
-Transport: reuse of receive buffers
+RpcDispatcher: don't copy the first anycast
+-------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2010]
+
+
+Reduction of memory size of classes
 -----------------------------------
-[https://issues.jboss.org/browse/JGRP-1998]
-
-On a message reception, the transport would create a new buffer in TCP and TCP_NIO2 (not in UDP), read the message into
-that buffer and then pass it to the one of thread pools, copying single messages (not batches).
-This was changed to reusing the same buffers in UDP, TCP and TCP_NIO2, by reading the network data into one of those
-buffers, de-serializing the message (or message batch) and then passing it to one of the thread pools.
-The effect is a much lower memory allocation rate.
+- Rsp (32 -> 24 bytes): https://issues.jboss.org/browse/JGRP-2011
+- Request: https://issues.jboss.org/browse/JGRP-2012
 
 
-Message bundling: reuse of send buffers
----------------------------------------
-[https://issues.jboss.org/browse/JGRP-1989]
-
-When sending messages, a new buffer would be created for marshalling for every message (or message bundle). This was
-changed to reuse the same buffer for all messages or message bundles. The effect is a smaller memory allocation rate
-on the send path.
+Remove one buffer copy in COMPRESS
+[https://issues.jboss.org/browse/JGRP-2017]
 
 
-TCP_NIO2: copy on-demand when sending messages
+Replace Java serialization with JGroups marshalling
+---------------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2033]
+
+Some internal classes still used Java serialization, which opens up security holes
+(google 'java serialization vulnerability').
+
+
+Faster marshalling / unmarshalling of messages
 ----------------------------------------------
-[https://issues.jboss.org/browse/JGRP-1991]
-
-If a message sent by TCP_NIO2 cannot be put entirely into the network buffer of the OS, then the remainder of that
-message is copied. This is needed to implement reusing of send buffers, see JGRP-1989 above.
+- Writing of headers: [https://issues.jboss.org/browse/JGRP-2042]
+- Reading of headers: [https://issues.jboss.org/browse/JGRP-2043]
 
 
-TCP_NIO2: single selector slows down writes and reads
------------------------------------------------------
-[https://issues.jboss.org/browse/JGRP-1999]
-
-This transport used to have a single selector, processing both writes and reads in the same thread. Writes are not
-expensive, but reads can be, as de-serialization adds up.
-We now have a reader thread for every NioConnection which processes reads (using work stealing) separate from the
-selector thread. When idle for some time, the reader thread terminates and a new thread is created on subsequent data
-available to be read.
-UPerf (4 nodes) showed a perf increase from 15'000 msgs/sec/node to 24'000. TCP_NIO2's speed is now roughly the
-same as TCP.
+TCP: reduce blocking
+--------------------
+[https://issues.jboss.org/browse/JGRP-2053]
 
 
-Headers: collapse 2 arrays into 1
+Message bundler improvements
+----------------------------
+[https://issues.jboss.org/browse/JGRP-2057]
+
+E.g. removal of SingletonAddress: not needed anymore as shared transports have been removed, too.
+
+
+Protocol: addition of up(Message) and down(Message) callbacks
+-------------------------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2067]
+
+This massively reduces the number of Event creations.
+
+
+TransferQueueBundler: remove multiple messages
+----------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2076]
+
+Instead of removing messages one-by-one, the remover thread now removes as many messages as are in
+the queue (contention) into a local queue (no contention) and then creates and sends message batches off of
+the local queue.
+
+
+Single thread pool
+------------------
+[https://issues.jboss.org/browse/JGRP-2099]
+
+There's only a single thread pool for all typs of messages, reducing the maintenance overhead of 4 thread pools
+and the configuration required.
+The internal thread pool is still available (size to the number of cores), but not configurable.
+A ForkJoinPool can be used instead of the thread pool (which can be disabled as well).
+
+
+Timer: tasks can indicate that they will not block
+--------------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2100]
+
+If a task calls execute() with an argument blocking==false, the task will be executed by the timer's main thread,
+and not be passed on to the timer's thread pool. This reduces the number of threads needed and therefore the
+number of context switches.
+
+
+Headers are resized unnecessarily
 ---------------------------------
-[https://issues.jboss.org/browse/JGRP-1990]
-
-A Message had a Headers instance which had an array for header IDs and another one for the actual headers. These
-2 arrays were collapsed into a single array and Headers is not a separate class anymore, but the array is managed
-directly inside Message.
-This reduces the memory needed for a message by ca 22 bytes!
+[https://issues.jboss.org/browse/JGRP-2120]
 
 
-RpcDispatcher: removal of unneeded field in a request
+ByteArrayDataOutputStream: expand more conservatively
 -----------------------------------------------------
-[https://issues.jboss.org/browse/JGRP-2001]
-
-The request-id was carried in both the Request (UnicastRequest or MulticastRequest) and the header, which is duplicate
-and a waste. Removed from Request and also removed rsp_expected from the header, total savings ca. 9 bytes per RPC.
+[https://issues.jboss.org/browse/JGRP-2124]
 
 
-Switched back from DatagramSocket to MulticastSocket for sending of IP multicasts
----------------------------------------------------------------------------------
-[https://issues.jboss.org/browse/JGRP-1970]
+Reading ints and longs creates unnecessary buffers
+--------------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2125]
 
-This caused some issues in MacOS based systems: when the routing table was not setup correctly, multicasting
-would not work (nodes wouldn't find each other).
-Also, on Windows, IPv6 wouldn't work: https://github.com/belaban/JGroups/wiki/FAQ.
-
-
-Make the default number of headers in a message configurable
-------------------------------------------------------------
-[https://issues.jboss.org/browse/JGRP-1985]
-
-The default was 3 (changed to 4 now) and if we had more headers, then the headers array needed to be resized
-(unneeded memory allocation).
+Ints and longs are read into a byte[] array first, then parsed. This was changed to read the values and add them
+to the resulting ints or longs.
+Should reduce overall memory allocation as ints and longs are used a lot in headers.
 
 
-Message bundling
-----------------
-[https://issues.jboss.org/browse/JGRP-1986]
+Table.removeMan() creates unneeded temp list
+--------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2126]
 
-When the threshold of the send queue was exceeded, the bundler thread would send messages one-by-one, leading
-to bad performance.
+This method is used a lot in NAKACK2 and UNICAST3. The change was to read messages directly into the resulting
+MessageBatch instead of a temp list and from there into the batch.
 
 
-TransferQueueBundler: switch to array from linked list for queue
-----------------------------------------------------------------
-[https://issues.jboss.org/browse/JGRP-1987]
+Reduce in-memory size of UnicastHeader3
+---------------------------------------
+[https://issues.jboss.org/browse/JGRP-2127]
 
-Less memory allocation overhead
+Reduced size from 40 -> 32 bytes.
+
+
+Cache result of log.isTraceEnabled()
+------------------------------------
+[https://issues.jboss.org/browse/JGRP-2130]
+
+This was done mainly for protocols where log.isTraceEnabled() was used a lot, such as TP, NAKACK2 or UNICAST3.
+Note that the log level can still be changed at runtime.
+
+
+Added MessageProcessingPolicy to define assigning of threads to messages or batches
+-----------------------------------------------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2143]
+
+This only applies only to regular (not OOB or internal) messages. Make sure that only one message per member is
+processed at a given time by the thread pool.
+This reduces the number of threads needed.
+
+
+UNICAST3 / NAKACK2: more efficient adding and removing of messages / batches to/from tables
+-------------------------------------------------------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2150]
+
+Simpler algorithm and removal of one lock (= less contention)
+
+
 
 
 
 Bug fixes
 =========
 
-SASL now handles merges correctly
----------------------------------
-[https://issues.jboss.org/browse/JGRP-1967]
+
+GMS sometimes ignores view bundling timeout
+-------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2028]
 
 
-FRAG2: message corruption when thread pools are disabled
+UFC and MFC headers get mixed up
+--------------------------------
+[https://issues.jboss.org/browse/JGRP-2072]
+
+Although indepent protocols, the protocol ID was assigned by the superclass, so replenish and credit messages
+would get mixed up, leading to stuttering in the sending of credits.
+
+
+Flow control: replenish credits after message delivery
+------------------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2084]
+
+
+MERGE3: merge is never triggered
+--------------------------------
+[https://issues.jboss.org/browse/JGRP-2092]
+
+This is an edge case that was not covered before: every subgroup coordinator has some other member as coord:
+A: BAC
+B: CAB
+C: ABC
+
+
+
+MPING: restart fails
+--------------------
+[https://issues.jboss.org/browse/JGRP-2116]
+
+
+
+UNICAST3 drops all messages until it receives one with first==true
+------------------------------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2131]
+
+This caused a bug in ASYM_ENCRYPT.
+
+
+ASYM_ENCRYPT: message batches are not handled correctly
+-------------------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2149]
+
+
+SYM_ENCRYPT: allow for other keystores besides JCEKS
+----------------------------------------------------
+[https://issues.jboss.org/browse/JGRP-2151]
+
+E.g. pcks#12 or jks
+
+
+ASYM_ENCRYPT encrypts an empty buffer into a null buffer
 --------------------------------------------------------
-[https://issues.jboss.org/browse/JGRP-1973]
+[https://issues.jboss.org/browse/JGRP-2153]
 
+This caused an NPE.
 
-Discovery leaks responses
--------------------------
-[https://issues.jboss.org/browse/JGRP-1983]
 
 
 
@@ -140,11 +356,11 @@ Discovery leaks responses
 Manual
 ======
 
-The manual is at http://www.jgroups.org/manual/index.html.
+The manual is at http://www.jgroups.org/manual4/index.html
 
 The complete list of features and bug fixes can be found at http://jira.jboss.com/jira/browse/JGRP.
 
 
 Bela Ban, Kreuzlingen, Switzerland
-Jan 2016
+March 2017
 

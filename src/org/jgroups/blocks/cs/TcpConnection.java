@@ -11,6 +11,7 @@ import java.net.*;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -26,6 +27,7 @@ public class TcpConnection extends Connection {
     protected DataInputStream        in;
     protected volatile Receiver      receiver;
     protected final TcpBaseServer    server;
+    protected final AtomicInteger    writers=new AtomicInteger(0); // to determine the last writer to flush
 
     /** Creates a connection stub and binds it, use {@link #connect(Address)} to connect */
     public TcpConnection(Address peer_addr, TcpBaseServer server) throws Exception {
@@ -44,8 +46,8 @@ public class TcpConnection extends Connection {
         if(s == null)
             throw new IllegalArgumentException("Invalid parameter s=" + s);
         setSocketParameters(s);
-        this.out=new DataOutputStream(new BufferedOutputStream(s.getOutputStream()));
-        this.in=new DataInputStream(new BufferedInputStream(s.getInputStream()));
+        this.out=new DataOutputStream(createBufferedOutputStream(s.getOutputStream()));
+        this.in=new DataInputStream(createBufferedInputStream(s.getInputStream()));
         this.peer_addr=server.usePeerConnections()? readPeerAddress(s)
           : new IpAddress((InetSocketAddress)s.getRemoteSocketAddress());
         last_access=getTimestamp(); // last time a message was sent or received (ns)
@@ -90,8 +92,8 @@ public class TcpConnection extends Connection {
             if(this.sock.getLocalSocketAddress() != null && this.sock.getLocalSocketAddress().equals(destAddr))
                 throw new IllegalStateException("socket's bind and connect address are the same: " + destAddr);
             Util.connect(this.sock, destAddr, server.sock_conn_timeout);
-            this.out=new DataOutputStream(new BufferedOutputStream(sock.getOutputStream()));
-            this.in=new DataInputStream(new BufferedInputStream(sock.getInputStream()));
+            this.out=new DataOutputStream(createBufferedOutputStream(sock.getOutputStream()));
+            this.in=new DataInputStream(createBufferedInputStream(sock.getInputStream()));
             if(send_local_addr)
                 sendLocalAddress(server.localAddress());
         }
@@ -117,15 +119,20 @@ public class TcpConnection extends Connection {
      * @param length
      */
     public void send(byte[] data, int offset, int length) throws Exception {
+        if(out == null)
+            return;
+        writers.incrementAndGet();
         send_lock.lock();
         try {
-            doSend(data, offset, length, true, true);
+            doSend(data, offset, length);
             updateLastAccessed();
         }
         catch(InterruptedException iex) {
             Thread.currentThread().interrupt(); // set interrupt flag again
         }
         finally {
+            if(writers.decrementAndGet() == 0) // only the last active writer thread calls flush()
+                flush(); // won't throw an exception
             send_lock.unlock();
         }
     }
@@ -145,19 +152,28 @@ public class TcpConnection extends Connection {
     }
 
 
-    protected void doSend(byte[] data, int offset, int length, boolean acquire_lock, boolean flush) throws Exception {
+    protected void doSend(byte[] data, int offset, int length) throws Exception {
         out.writeInt(length); // write the length of the data buffer first
         out.write(data,offset,length);
-        if(!flush || (acquire_lock && send_lock.hasQueuedThreads()))
-            return; // don't flush as some of the waiting threads will do the flush, or flush is false
-        out.flush(); // may not be very efficient (but safe)
     }
 
-    protected void flush() throws Exception {
-        if(out != null)
+    protected void flush() {
+        try {
             out.flush();
+        }
+        catch(Throwable t) {
+        }
     }
 
+    protected BufferedOutputStream createBufferedOutputStream(OutputStream out) {
+        int size=(server instanceof TcpServer)? ((TcpServer)server).getBufferedOutputStreamSize() : 0;
+        return size == 0? new BufferedOutputStream(out) : new BufferedOutputStream(out, size);
+    }
+
+    protected BufferedInputStream createBufferedInputStream(InputStream in) {
+        int size=(server instanceof TcpServer)? ((TcpServer)server).getBufferedInputStreamSize() : 0;
+        return size == 0? new BufferedInputStream(in) : new BufferedInputStream(in, size);
+    }
 
     protected void setSocketParameters(Socket client_sock) throws SocketException {
         try {
@@ -194,7 +210,7 @@ public class TcpConnection extends Connection {
 
             // write the version
             out.writeShort(Version.version);
-            out.writeShort(local_addr.size()); // address size
+            out.writeShort(local_addr.serializedSize()); // address size
             local_addr.writeTo(out);
             out.flush(); // needed ?
             updateLastAccessed();
@@ -218,15 +234,16 @@ public class TcpConnection extends Connection {
             byte[] input_cookie=new byte[cookie.length];
             in.readFully(input_cookie, 0, input_cookie.length);
             if(!Arrays.equals(cookie, input_cookie))
-                throw new SocketException("BaseServer.TcpConnection.readPeerAddress(): cookie read by "
-                                            + server.localAddress() + " does not match own cookie; terminating connection");
+                throw new SocketException(String.format("%s: BaseServer.TcpConnection.readPeerAddress(): cookie sent by " +
+                                                          "%s:%d does not match own cookie; terminating connection",
+                                                        server.localAddress(), client_sock.getInetAddress(), client_sock.getPort()));
             // then read the version
             short version=in.readShort();
             if(!Version.isBinaryCompatible(version))
                 throw new IOException("packet from " + client_sock.getInetAddress() + ":" + client_sock.getPort() +
                                         " has different version (" + Version.print(version) +
                                         ") from ours (" + Version.printVersion() + "); discarding it");
-            short addr_len=in.readShort(); // only needed by NioConnection
+            in.readShort(); // address length is only needed by NioConnection
 
             Address client_peer_addr=new IpAddress();
             client_peer_addr.readFrom(in);
@@ -243,7 +260,7 @@ public class TcpConnection extends Connection {
     protected class Receiver implements Runnable {
         protected final Thread     recv;
         protected volatile boolean receiving=true;
-        protected volatile byte[]  buffer;
+        protected byte[]           buffer; // no need to be volatile, only accessed by this thread
 
         public Receiver(ThreadFactory f) {
             recv=f.newThread(this,"Connection.Receiver [" + getSockAddress() + "]");
@@ -269,12 +286,9 @@ public class TcpConnection extends Connection {
             Throwable t=null;
             while(canRun()) {
                 try {
-                    int len=in.readInt();
-                    if(buffer == null || buffer.length < len)
-                        buffer=new byte[len];
-                    in.readFully(buffer, 0, len);
+                    int len=in.readInt(); // needed to read messages from TCP_NIO2
+                    server.receive(peer_addr, in, len);
                     updateLastAccessed();
-                    server.receive(peer_addr, buffer, 0, len);
                 }
                 catch(OutOfMemoryError mem_ex) {
                     t=mem_ex;

@@ -2,11 +2,12 @@
 package org.jgroups;
 
 import org.jgroups.util.Bits;
-import org.jgroups.util.Streamable;
+import org.jgroups.util.SizeStreamable;
 import org.jgroups.util.Util;
 
 import java.io.DataInput;
 import java.io.DataOutput;
+import java.util.function.Supplier;
 
 
 /**
@@ -14,9 +15,9 @@ import java.io.DataOutput;
  * Ordering between views is important for example in a virtual synchrony protocol where
  * all views seen by a member have to be ordered.
  */
-public class ViewId implements Comparable<ViewId>, Streamable {
+public class ViewId implements Comparable<ViewId>, SizeStreamable, Constructable<ViewId> {
     protected Address creator;   // Address of the creator of this view
-    protected long    id=0;      // Lamport time of the view
+    protected long    id;        // Lamport time of the view
 
 
     public ViewId() { // used for externalization
@@ -45,6 +46,9 @@ public class ViewId implements Comparable<ViewId>, Streamable {
         this.id=id;
     }
 
+    public Supplier<? extends ViewId> create() {
+        return ViewId::new;
+    }
 
     /**
      * Returns the address of the member that issued this view

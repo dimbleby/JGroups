@@ -51,7 +51,7 @@ public class NAKACK_RetransmitTest {
         a.connect("NAKACK_RetransmitTest");
         b.connect("NAKACK_RetransmitTest");
         c.connect("NAKACK_RetransmitTest");
-        Util.waitUntilAllChannelsHaveSameSize(10000, 500, a, b, c);
+        Util.waitUntilAllChannelsHaveSameView(10000, 500, a, b, c);
     }
 
     @AfterMethod
@@ -87,7 +87,7 @@ public class NAKACK_RetransmitTest {
         for(int i=0; i < 10; i++) {
             if(la.size() == NUM_MSGS && lb.size() == NUM_MSGS && lc.size() == NUM_MSGS)
                 break;
-            STABLE stable=(STABLE)a.getProtocolStack().findProtocol(STABLE.class);
+            STABLE stable=a.getProtocolStack().findProtocol(STABLE.class);
             stable.gc();
             Util.sleep(1000);
         }
@@ -112,11 +112,10 @@ public class NAKACK_RetransmitTest {
         for(JChannel ch: channels) {
             TP transport=ch.getProtocolStack().getTransport();
             transport.setMaxBundleSize(MAX_BUNDLE_SIZE);
-            NAKACK2 nak=(NAKACK2)ch.getProtocolStack().findProtocol(NAKACK2.class);
+            NAKACK2 nak=ch.getProtocolStack().findProtocol(NAKACK2.class);
             if(nak == null)
                 throw new IllegalStateException("NAKACK2 not present in the stack");
             nak.setValue("max_xmit_req_size", 5000);
-            nak.setValue("max_msg_batch_size", 10000);
         }
     }
 
@@ -125,7 +124,7 @@ public class NAKACK_RetransmitTest {
         protected final List<Integer> list=new ArrayList<>();
 
         public void receive(Message msg) {
-            Integer num=(Integer)msg.getObject();
+            Integer num=msg.getObject();
             list.add(num);
         }
 
@@ -135,14 +134,14 @@ public class NAKACK_RetransmitTest {
 
     protected void stopRetransmission(JChannel ... channels) throws Exception {
         for(JChannel ch: channels) {
-            NAKACK2 nak=(NAKACK2)ch.getProtocolStack().findProtocol(NAKACK2.class);
+            NAKACK2 nak=ch.getProtocolStack().findProtocol(NAKACK2.class);
             STOP_RETRANSMISSION.invoke(nak);
         }
     }
 
     protected void startRetransmission(JChannel ... channels) throws Exception {
         for(JChannel ch: channels) {
-            NAKACK2 nak=(NAKACK2)ch.getProtocolStack().findProtocol(NAKACK2.class);
+            NAKACK2 nak=ch.getProtocolStack().findProtocol(NAKACK2.class);
             START_RETRANSMISSION.invoke(nak);
         }
     }
@@ -150,7 +149,7 @@ public class NAKACK_RetransmitTest {
     protected static void insertDiscardProtocol(JChannel ... channels) {
         for(JChannel ch: channels) {
             ProtocolStack stack=ch.getProtocolStack();
-            stack.insertProtocolInStack(new DiscardEveryOtherMulticastMessage(), stack.getTransport(), ProtocolStack.ABOVE);
+            stack.insertProtocolInStack(new DiscardEveryOtherMulticastMessage(), stack.getTransport(), ProtocolStack.Position.ABOVE);
         }
     }
 
@@ -170,16 +169,13 @@ public class NAKACK_RetransmitTest {
     protected static class DiscardEveryOtherMulticastMessage extends Protocol {
         protected boolean discard=false;
 
-        public Object down(Event evt) {
-            if(evt.getType() == Event.MSG) {
-                Message msg=(Message)evt.getArg();
-                if(msg.dest() == null) {
-                    discard=!discard;
-                    if(discard)
-                        return null;
-                }
+        public Object down(Message msg) {
+            if(msg.dest() == null) {
+                discard=!discard;
+                if(discard)
+                    return null;
             }
-            return down_prot.down(evt);
+            return down_prot.down(msg);
         }
     }
 

@@ -28,10 +28,6 @@ import java.util.concurrent.TimeUnit;
 @MBean(description="Simple flow control protocol based on a credit system")
 public abstract class FlowControl extends Protocol {
 
-    protected final static FcHeader REPLENISH_HDR=new FcHeader(FcHeader.REPLENISH);
-    protected final static FcHeader CREDIT_REQUEST_HDR=new FcHeader(FcHeader.CREDIT_REQUEST);  
-
-    
     /* -----------------------------------------    Properties     -------------------------------------------------- */
     
     /**
@@ -45,7 +41,7 @@ public abstract class FlowControl extends Protocol {
      * a REPLENISHMENT request to the members from which we expect credits. A value <= 0 means to wait forever.
      */
     @Property(description="Max time (in ms) to block")
-    protected long max_block_time=5000;
+    protected long max_block_time=500;
 
     /**
      * Defines the max number of milliseconds for a message to block before being sent, based on the length of
@@ -228,12 +224,6 @@ public abstract class FlowControl extends Protocol {
         return sb.toString();
     }
 
-    public Map<String, Object> dumpStats() {
-        Map<String, Object> retval=super.dumpStats();      
-        retval.put("receivers", printMap(received));
-        return retval;
-    }
-
 
     protected long getMaxBlockTime(long length) {
         if(max_block_times == null)
@@ -254,7 +244,11 @@ public abstract class FlowControl extends Protocol {
      */
     protected abstract boolean handleMulticastMessage();
 
-    protected abstract void handleCredit(Address sender, long increase);
+    protected abstract void    handleCredit(Address sender, long increase);
+
+    protected abstract Header  getReplenishHeader();
+    protected abstract Header  getCreditRequestHeader();
+
 
 
     /**
@@ -293,35 +287,8 @@ public abstract class FlowControl extends Protocol {
     @SuppressWarnings("unchecked")
     public Object down(Event evt) {
         switch(evt.getType()) {
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                if(msg.isFlagSet(Message.Flag.NO_FC))
-                    break;
-
-                Address dest=msg.getDest();
-                boolean multicast=dest == null;
-                boolean handle_multicasts=handleMulticastMessage();
-                boolean process=(handle_multicasts && multicast) || (!handle_multicasts && !multicast);
-                if(!process)
-                    break;
-
-                int length=msg.getLength();
-                if(length == 0)
-                    break;
-
-                Object retval=handleDownMessage(evt, msg, dest, length);
-
-                // if the message is DONT_LOOPBACK, we will not receive it, therefore the credit
-                // check needs to be done now
-                if(msg.isTransientFlagSet(Message.TransientFlag.DONT_LOOPBACK)) {
-                    long new_credits=adjustCredit(received, local_addr, length);
-                    if(new_credits > 0)
-                        sendCredit(local_addr, new_credits);
-                }
-                return retval;
-
             case Event.CONFIG:
-                handleConfigEvent((Map<String,Object>)evt.getArg()); 
+                handleConfigEvent(evt.getArg());
                 break;
             
             case Event.VIEW_CHANGE:
@@ -329,46 +296,43 @@ public abstract class FlowControl extends Protocol {
                 break;
 
             case Event.SET_LOCAL_ADDRESS:
-                local_addr=(Address)evt.getArg();
+                local_addr=evt.getArg();
                 break;
         }
         return down_prot.down(evt); // this could potentially use the lower protocol's thread which may block
     }
 
 
-    @SuppressWarnings("unchecked")
+    public Object down(Message msg) {
+        if(msg.isFlagSet(Message.Flag.NO_FC))
+            return down_prot.down(msg);
+
+        Address dest=msg.getDest();
+        boolean multicast=dest == null;
+        boolean handle_multicasts=handleMulticastMessage();
+        boolean process=(handle_multicasts && multicast) || (!handle_multicasts && !multicast);
+        if(!process)
+            return down_prot.down(msg);
+
+        int length=msg.getLength();
+        if(length == 0)
+            return down_prot.down(msg);
+
+        Object retval=handleDownMessage(msg, dest, length);
+
+        // if the message is DONT_LOOPBACK, we will not receive it, therefore the credit
+        // check needs to be done now
+        if(msg.isTransientFlagSet(Message.TransientFlag.DONT_LOOPBACK)) {
+            long new_credits=adjustCredit(received, local_addr, length);
+            if(new_credits > 0)
+                sendCredit(local_addr, new_credits);
+        }
+        return retval;
+    }
+
+
     public Object up(Event evt) {
         switch(evt.getType()) {
-
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                if(msg.isFlagSet(Message.Flag.NO_FC))
-                    break;
-
-                Address dest=msg.getDest();
-                boolean multicast=dest == null;
-                boolean handle_multicasts=handleMulticastMessage();
-                FcHeader hdr=(FcHeader)msg.getHeader(this.id);
-                boolean process=(handle_multicasts && multicast) || (!handle_multicasts && !multicast) || hdr != null;
-                if(!process)
-                    break;
-                
-                if(hdr != null) {
-                    handleUpEvent(msg, hdr);
-                    return null; // don't pass message up
-                }
-
-                Address sender=msg.getSrc();
-                long new_credits=adjustCredit(received, sender, msg.getLength());
-                
-                try {
-                    return up_prot.up(evt);
-                }
-                finally {
-                    if(new_credits > 0)
-                        sendCredit(sender, new_credits);
-                }
-
             case Event.VIEW_CHANGE:
                 handleViewChange(((View)evt.getArg()).getMembers());
                 break;
@@ -376,6 +340,36 @@ public abstract class FlowControl extends Protocol {
         return up_prot.up(evt);
     }
 
+    public Object up(Message msg) {
+        if(msg.isFlagSet(Message.Flag.NO_FC))
+            return up_prot.up(msg);
+
+        Address dest=msg.getDest();
+        boolean multicast=dest == null;
+        boolean handle_multicasts=handleMulticastMessage();
+        FcHeader hdr=msg.getHeader(this.id);
+        boolean process=(handle_multicasts && multicast) || (!handle_multicasts && !multicast) || hdr != null;
+        if(!process)
+            return up_prot.up(msg);
+
+        if(hdr != null) {
+            handleUpEvent(msg, hdr);
+            return null; // don't pass message up
+        }
+
+        try {
+            return up_prot.up(msg);
+        }
+        finally {
+            int length=msg.getLength();
+            if(length > 0) {
+                Address sender=msg.getSrc();
+                long new_credits=adjustCredit(received, sender, length);
+                if(new_credits > 0)
+                    sendCredit(sender, new_credits);
+            }
+        }
+    }
 
     protected void handleUpEvent(final Message msg, FcHeader hdr) {
         switch(hdr.type) {
@@ -406,7 +400,7 @@ public abstract class FlowControl extends Protocol {
             Address dest=msg.getDest();
             boolean multicast=dest == null;
             boolean handle_multicasts=handleMulticastMessage();
-            FcHeader hdr=(FcHeader)msg.getHeader(this.id);
+            FcHeader hdr=msg.getHeader(this.id);
             boolean process=(handle_multicasts && multicast) || (!handle_multicasts && !multicast) || hdr != null;
             if(!process)
                 continue;
@@ -419,18 +413,17 @@ public abstract class FlowControl extends Protocol {
             length+=msg.getLength();
         }
 
-        Address sender=batch.sender();
-        long new_credits=0;
-        if(length > 0)
-            new_credits=adjustCredit(received, sender, length);
-
         if(!batch.isEmpty()) {
             try {
                 up_prot.up(batch);
             }
             finally {
-                if(new_credits > 0)
-                    sendCredit(sender, new_credits);
+                if(length > 0) {
+                    Address sender=batch.sender();
+                    long new_credits=adjustCredit(received, sender, length);
+                    if(new_credits > 0)
+                        sendCredit(sender, new_credits);
+                }
             }
         }
     }
@@ -445,7 +438,7 @@ public abstract class FlowControl extends Protocol {
     }
 
     
-    protected abstract Object handleDownMessage(final Event evt, final Message msg, Address dest, int length);
+    protected abstract Object handleDownMessage(final Message msg, Address dest, int length);
 
 
 
@@ -488,8 +481,9 @@ public abstract class FlowControl extends Protocol {
         if(log.isTraceEnabled())
             log.trace("sending %d credits to %s", credits, dest);
         Message msg=new Message(dest, longToBuffer(credits))
-          .setFlag(Message.Flag.OOB, Message.Flag.INTERNAL, Message.Flag.DONT_BUNDLE).putHeader(this.id,REPLENISH_HDR);
-        down_prot.down(new Event(Event.MSG, msg));
+          .setFlag(Message.Flag.OOB, Message.Flag.INTERNAL, Message.Flag.DONT_BUNDLE)
+          .putHeader(this.id,getReplenishHeader());
+        down_prot.down(msg);
         num_credit_responses_sent++;
     }
 
@@ -503,8 +497,9 @@ public abstract class FlowControl extends Protocol {
         if(log.isTraceEnabled())
             log.trace("sending request for %d credits to %s", credits_needed, dest);
         Message msg=new Message(dest, longToBuffer(credits_needed))
-          .setFlag(Message.Flag.OOB, Message.Flag.INTERNAL, Message.Flag.DONT_BUNDLE).putHeader(this.id, CREDIT_REQUEST_HDR);
-        down_prot.down(new Event(Event.MSG, msg));
+          .setFlag(Message.Flag.OOB, Message.Flag.INTERNAL, Message.Flag.DONT_BUNDLE)
+          .putHeader(this.id, getCreditRequestHeader());
+        down_prot.down(msg);
         num_credit_requests_sent++;
     }
 

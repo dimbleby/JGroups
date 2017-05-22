@@ -15,6 +15,7 @@ import java.io.DataOutput;
 import java.util.*;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.Future;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 
@@ -40,50 +41,58 @@ public class MERGE3 extends Protocol {
 
     /* -----------------------------------------    Properties     -------------------------------------------------- */
     @Property(description="Minimum time in ms before sending an info message")
-    protected long min_interval=1000;
+    protected long    min_interval=1000;
 
     @Property(description="Interval (in milliseconds) when the next info " +
             "message will be sent. A random value is picked from range [1..max_interval]")
-    protected long max_interval=10000;
+    protected long    max_interval=10000;
 
     @Property(description="The max number of merge participants to be involved in a merge. 0 sets this to unlimited.")
-    protected int  max_participants_in_merge=100;
+    protected int     max_participants_in_merge=100;
+
+    @Property(description="If true, only coordinators periodically check view consistency, otherwise everybody runs " +
+      "this task (https://issues.jboss.org/browse/JGRP-2092). Might get removed without notice.")
+    protected boolean only_coords_run_consistency_checker=false;
 
     /* ---------------------------------------------- JMX -------------------------------------------------------- */
     @Property(description="Interval (in ms) after which we check for view inconsistencies")
-    protected long check_interval=0;
+    protected long    check_interval;
 
     @ManagedAttribute(description="Number of cached ViewIds")
     public int getViews() {return views.size();}
 
     /* --------------------------------------------- Fields ------------------------------------------------------ */
 
-    protected Address        local_addr=null;
+    protected Address          local_addr;
 
-    protected volatile View  view;
+    protected volatile View    view;
 
-    protected TimeScheduler  timer;
+    protected TimeScheduler    timer;
 
-    protected Future<?>      info_sender;
+    protected final InfoSender info_sender=new InfoSender();
 
-    protected Future<?>      view_consistency_checker;
+    protected Future<?>        info_sender_future;
+
+    protected Future<?>        view_consistency_checker;
 
     // hashmap to keep track of view-id sent in INFO messages. Keys=senders, values = ViewId sent
     protected final Map<Address,ViewId> views=new HashMap<>();
 
     protected final ResponseCollector<View> view_rsps=new ResponseCollector<>();
 
-    protected boolean        transport_supports_multicasting=true;
+    protected boolean          transport_supports_multicasting=true;
 
-    protected String         cluster_name;
+    protected String           cluster_name;
 
 
 
     @ManagedAttribute(description="Whether or not the current member is the coordinator")
-    protected volatile boolean is_coord=false;
+    protected volatile boolean is_coord;
     
     @ManagedAttribute(description="Number of times a MERGE event was sent up the stack")
-    protected int           num_merge_events=0;
+    protected int           num_merge_events;
+
+    public int getNumMergeEvents() {return num_merge_events;}
 
     @ManagedAttribute(description="Is the view consistency checker task running")
     public synchronized boolean isViewConsistencyCheckerRunning() {
@@ -95,7 +104,7 @@ public class MERGE3 extends Protocol {
 
     @ManagedAttribute(description="Is the info sender task running")
     public synchronized boolean isInfoSenderRunning() {
-        return info_sender != null && !info_sender.isDone();
+        return info_sender_future != null && !info_sender_future.isDone();
     }
 
     @ManagedOperation(description="Lists the contents of the cached views")
@@ -180,14 +189,15 @@ public class MERGE3 extends Protocol {
     }
 
     protected synchronized void startInfoSender() {
-        if(info_sender == null || info_sender.isDone())
-            info_sender=timer.scheduleWithDynamicInterval(new InfoSender());
+        if(info_sender_future == null || info_sender_future.isDone())
+            info_sender_future=timer.scheduleWithDynamicInterval(info_sender, getTransport() instanceof TCP);
     }
 
     protected synchronized void stopInfoSender() {
-        if(info_sender != null) {
-            info_sender.cancel(true);
-            info_sender=null;
+        if(info_sender_future != null) {
+            info_sender_future.cancel(true);
+            info_sender.stop();
+            info_sender_future=null;
         }
     }
 
@@ -211,7 +221,7 @@ public class MERGE3 extends Protocol {
             case Event.CONNECT_USE_FLUSH:
             case Event.CONNECT_WITH_STATE_TRANSFER:
             case Event.CONNECT_WITH_STATE_TRANSFER_USE_FLUSH:
-                cluster_name=(String)evt.getArg();
+                cluster_name=evt.getArg();
                 break;
 
             case Event.DISCONNECT:
@@ -228,19 +238,22 @@ public class MERGE3 extends Protocol {
                 stopViewConsistencyChecker(); // should already be stopped
                 stopInfoSender();             // should already be stopped
                 Object ret=down_prot.down(evt);
-                view=(View)evt.getArg();
+                view=evt.getArg();
                 clearViews();
 
                 if(ergonomics && max_participants_in_merge > 0)
                     max_participants_in_merge=Math.max(100, view.size() / 3);
 
                 startInfoSender();
+                if(only_coords_run_consistency_checker == false)
+                    startViewConsistencyChecker();
 
                 List<Address> mbrs=view.getMembers();
                 Address coord=mbrs.isEmpty()? null : mbrs.get(0);
                 if(Objects.equals(coord, local_addr)) {
                     is_coord=true;
-                    startViewConsistencyChecker(); // start task if we became coordinator (doesn't start if already running)
+                    if(only_coords_run_consistency_checker)
+                        startViewConsistencyChecker(); // start task if we became coordinator (doesn't start if already running)
                 }
                 else {
                     // if we were coordinator, but are no longer, stop task. this happens e.g. when we merge and someone
@@ -251,41 +264,36 @@ public class MERGE3 extends Protocol {
                 return ret;
 
             case Event.SET_LOCAL_ADDRESS:
-                local_addr=(Address)evt.getArg();
+                local_addr=evt.getArg();
                 break;
         }
         return down_prot.down(evt);
     }
 
 
-    public Object up(Event evt) {
-        switch(evt.getType()) {
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                MergeHeader hdr=(MergeHeader)msg.getHeader(getId());
-                if(hdr == null)
-                    break;
-                Address sender=msg.getSrc();
-                switch(hdr.type) {
-                    case INFO:
-                        addInfo(sender, hdr.view_id, hdr.logical_name, hdr.physical_addr);
-                        break;
-                    case VIEW_REQ:
-                        Message view_rsp=new Message(sender).setFlag(Message.Flag.INTERNAL)
-                          .putHeader(getId(), MergeHeader.createViewResponse()).setBuffer(marshal(view));
-                        down_prot.down(new Event(Event.MSG, view_rsp));
-                        break;
-                    case VIEW_RSP:
-                        View tmp_view=readView(msg.getRawBuffer(), msg.getOffset(), msg.getLength());
-                        if(tmp_view != null)
-                            view_rsps.add(sender, tmp_view);
-                        break;
-                    default:
-                        log.error("Type %s not known", hdr.type);
-                }
-                return null;
+    public Object up(Message msg) {
+        MergeHeader hdr=msg.getHeader(getId());
+        if(hdr == null)
+            return up_prot.up(msg);
+        Address sender=msg.getSrc();
+        switch(hdr.type) {
+            case INFO:
+                addInfo(sender, hdr.view_id, hdr.logical_name, hdr.physical_addr);
+                break;
+            case VIEW_REQ:
+                Message view_rsp=new Message(sender).setFlag(Message.Flag.INTERNAL)
+                  .putHeader(getId(), MergeHeader.createViewResponse()).setBuffer(marshal(view));
+                down_prot.down(view_rsp);
+                break;
+            case VIEW_RSP:
+                View tmp_view=readView(msg.getRawBuffer(), msg.getOffset(), msg.getLength());
+                if(tmp_view != null)
+                    view_rsps.add(sender, tmp_view);
+                break;
+            default:
+                log.error("Type %s not known", hdr.type);
         }
-        return up_prot.up(evt);
+        return null;
     }
 
 
@@ -318,15 +326,15 @@ public class MERGE3 extends Protocol {
     protected MergeHeader createInfo() {
         PhysicalAddress physical_addr=local_addr != null?
           (PhysicalAddress)down_prot.down(new Event(Event.GET_PHYSICAL_ADDRESS, local_addr)) : null;
-        return MergeHeader.createInfo(view.getViewId(), UUID.get(local_addr), physical_addr);
+        return MergeHeader.createInfo(view.getViewId(), NameCache.get(local_addr), physical_addr);
     }
 
     /** Adds received INFO to views hashmap */
     protected void addInfo(Address sender, ViewId view_id, String logical_name, PhysicalAddress physical_addr) {
         if(logical_name != null && sender instanceof UUID)
-            UUID.add(sender, logical_name);
+            NameCache.add(sender, logical_name);
         if(physical_addr != null)
-            down(new Event(Event.SET_PHYSICAL_ADDRESS, new Tuple<>(sender, physical_addr)));
+            down(new Event(Event.ADD_PHYSICAL_ADDRESS, new Tuple<>(sender, physical_addr)));
         synchronized(views) {
             ViewId existing=views.get(sender);
             if(existing == null || existing.compareTo(view_id) < 0)
@@ -364,6 +372,7 @@ public class MERGE3 extends Protocol {
 
     protected class InfoSender implements TimeScheduler.Task {
         protected final long discovery_timeout=(max_interval + min_interval) /2;
+        protected Responses  rsps;
 
         public void run() {
             if(view == null) {
@@ -377,11 +386,11 @@ public class MERGE3 extends Protocol {
             if(transport_supports_multicasting) { // mcast the discovery request to all but self
                 Message msg=new Message().setFlag(Message.Flag.INTERNAL).putHeader(getId(), hdr)
                   .setTransientFlag(Message.TransientFlag.DONT_LOOPBACK);
-                down_prot.down(new Event(Event.MSG, msg));
+                down_prot.down(msg);
                 return;
             }
 
-            Responses rsps=(Responses)down_prot.down(Event.FIND_MBRS_EVT);
+            rsps=(Responses)down_prot.down(Event.FIND_MBRS_EVT);
             rsps.waitFor(discovery_timeout); // return immediately if done
             rsps.done();
             if(rsps.isEmpty())
@@ -395,8 +404,13 @@ public class MERGE3 extends Protocol {
                 Address dest=rsp.getPhysicalAddr();
                 if(dest == null) continue;
                 Message info=new Message(dest).setFlag(Message.Flag.INTERNAL).putHeader(getId(), hdr);
-                down_prot.down(new Event(Event.MSG, info));
+                down_prot.down(info);
             }
+        }
+
+        public void stop() {
+            if(rsps != null)
+                rsps.clear();
         }
 
         public long nextInterval() {
@@ -436,7 +450,9 @@ public class MERGE3 extends Protocol {
             for(Map.Entry<ViewId,Set<Address>> entry: converted_views.entrySet()) {
                 Address coord=entry.getKey().getCreator();
                 Set<Address> members=entry.getValue();
-                if(members != null && members.contains(coord))
+                if(only_coords_run_consistency_checker && members != null && members.contains(coord))
+                    coords.add(coord);
+                else
                     coords.add(coord);
             }
 
@@ -479,7 +495,7 @@ public class MERGE3 extends Protocol {
                 }
                 Message view_req=new Message(target).setFlag(Message.Flag.INTERNAL)
                   .putHeader(getId(), MergeHeader.createViewRequest());
-                down_prot.down(new Event(Event.MSG, view_req));
+                down_prot.down(view_req);
             }
             view_rsps.waitForAllResponses(check_interval / 10);
             Map<Address,View> results=view_rsps.getResults();
@@ -538,8 +554,10 @@ public class MERGE3 extends Protocol {
             this.logical_name=logical_name;
             this.physical_addr=physical_addr;
         }
+        public short getMagicId() {return 75;}
+        public Supplier<? extends Header> create() {return MergeHeader::new;}
 
-        public int size() {
+        public int serializedSize() {
             int retval=Global.BYTE_SIZE; // for the type
             retval+=Util.size(view_id);
             retval+=Global.BYTE_SIZE;     // presence byte for logical_name

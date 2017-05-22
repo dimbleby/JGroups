@@ -43,6 +43,7 @@ public class NAKACK_Delivery_Test {
             public void sendUnicast(PhysicalAddress dest, byte[] data, int offset, int length) throws Exception {}
             public String getInfo() {return null;}
             public Object down(Event evt) {return null;}
+            public Object down(Message msg) {return null;}
             protected PhysicalAddress getPhysicalAddress() {return null;}
             public TimeScheduler getTimer() {return new TimeScheduler3();}
         };
@@ -149,12 +150,12 @@ public class NAKACK_Delivery_Test {
 
     private void send(Address sender, long seqno, int number, boolean oob) {
         assert sender != null;
-        nak.up(new Event(Event.MSG,msg(sender,seqno,number,oob)));
+        nak.up(msg(sender,seqno,number,oob));
     }
 
 
     private static Message msg(Address sender, long seqno, int number, boolean oob) {
-        Message msg=new Message(null, sender, number);
+        Message msg=new Message(null, number).src(sender);
         if(oob)
             msg.setFlag(Message.Flag.OOB);
         if(seqno != -1)
@@ -175,19 +176,16 @@ public class NAKACK_Delivery_Test {
             }
         }
 
-        public Object up(Event evt) {
-            if(evt.getType() == Event.MSG) {
-                Message msg=(Message)evt.getArg();
-                Address sender=msg.getSrc();
-                Collection<Message> list=msgs.get(sender);
-                if(list == null) {
-                    list=new ConcurrentLinkedQueue<>();
-                    Collection<Message> tmp=msgs.putIfAbsent(sender, list);
-                    if(tmp != null)
-                        list=tmp;
-                }
-                list.add(msg);
+        public Object up(Message msg) {
+            Address sender=msg.getSrc();
+            Collection<Message> list=msgs.get(sender);
+            if(list == null) {
+                list=new ConcurrentLinkedQueue<>();
+                Collection<Message> tmp=msgs.putIfAbsent(sender, list);
+                if(tmp != null)
+                    list=tmp;
             }
+            list.add(msg);
             return null;
         }
 

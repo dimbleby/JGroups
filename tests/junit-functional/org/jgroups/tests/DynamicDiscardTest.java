@@ -51,11 +51,11 @@ public class DynamicDiscardTest {
             channels[i].connect("DynamicDiscardTest");
             System.out.print(i + 1 + " ");
         }
-        Util.waitUntilAllChannelsHaveSameSize(10000, 1000, channels);
+        Util.waitUntilAllChannelsHaveSameView(10000, 1000, channels);
 
         // discard all messages (except those to self)
         DISCARD discard = new DISCARD();
-        channels[0].getProtocolStack().insertProtocol(discard, ProtocolStack.ABOVE, TP.class);
+        channels[0].getProtocolStack().insertProtocol(discard, ProtocolStack.Position.ABOVE, TP.class);
         discard.setDiscardAll(true);
 
         // send a RSVP message

@@ -9,6 +9,7 @@ import org.jgroups.util.*;
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Supplier;
 
 
 /**
@@ -161,7 +162,10 @@ public class COUNTER extends Protocol {
     public Object down(Event evt) {
         switch(evt.getType()) {
             case Event.SET_LOCAL_ADDRESS:
-                local_addr=(Address)evt.getArg();
+                local_addr=evt.getArg();
+                break;
+            case Event.VIEW_CHANGE:
+                handleView(evt.arg());
                 break;
         }
         return down_prot.down(evt);
@@ -169,37 +173,37 @@ public class COUNTER extends Protocol {
 
     public Object up(Event evt) {
         switch(evt.getType()) {
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                CounterHeader hdr=(CounterHeader)msg.getHeader(id);
-                if(hdr == null)
-                    break;
-
-                try {
-                    Object obj=streamableFromBuffer(msg.getRawBuffer(), msg.getOffset(), msg.getLength());
-                    if(log.isTraceEnabled())
-                        log.trace("[" + local_addr + "] <-- [" + msg.getSrc() + "] " + obj);
-
-                    if(obj instanceof Request) {
-                        handleRequest((Request)obj, msg.getSrc());
-                    }
-                    else if(obj instanceof Response) {
-                        handleResponse((Response)obj, msg.getSrc());
-                    }
-                    else {
-                        log.error(Util.getMessage("ReceivedObjectIsNeitherARequestNorAResponse") + obj);
-                    }
-                }
-                catch(Exception ex) {
-                    log.error(Util.getMessage("FailedHandlingMessage"), ex);
-                }
-                return null;
-
             case Event.VIEW_CHANGE:
-                handleView((View)evt.getArg());
+                handleView(evt.getArg());
                 break;
         }
         return up_prot.up(evt);
+    }
+
+    public Object up(Message msg) {
+        CounterHeader hdr=msg.getHeader(id);
+        if(hdr == null)
+            return up_prot.up(msg);
+
+        try {
+            Object obj=streamableFromBuffer(msg.getRawBuffer(), msg.getOffset(), msg.getLength());
+            if(log.isTraceEnabled())
+                log.trace("[" + local_addr + "] <-- [" + msg.getSrc() + "] " + obj);
+
+            if(obj instanceof Request) {
+                handleRequest((Request)obj, msg.getSrc());
+            }
+            else if(obj instanceof Response) {
+                handleResponse((Response)obj, msg.getSrc());
+            }
+            else {
+                log.error(Util.getMessage("ReceivedObjectIsNeitherARequestNorAResponse") + obj);
+            }
+        }
+        catch(Exception ex) {
+            log.error(Util.getMessage("FailedHandlingMessage"), ex);
+        }
+        return null;
     }
 
     
@@ -436,7 +440,7 @@ public class COUNTER extends Protocol {
             if(log.isTraceEnabled())
                 log.trace("[" + local_addr + "] --> [" + (dest == null? "ALL" : dest) + "] " + req);
 
-            down_prot.down(new Event(Event.MSG, msg));
+            down_prot.down(msg);
         }
         catch(Exception ex) {
             log.error(Util.getMessage("FailedSending") + req + " request: " + ex);
@@ -454,7 +458,7 @@ public class COUNTER extends Protocol {
             if(log.isTraceEnabled())
                 log.trace("[" + local_addr + "] --> [" + dest + "] " + rsp);
 
-            down_prot.down(new Event(Event.MSG, rsp_msg));
+            down_prot.down(rsp_msg);
         }
         catch(Exception ex) {
             log.error(Util.getMessage("FailedSending") + rsp + " message to " + dest + ": " + ex);
@@ -480,7 +484,7 @@ public class COUNTER extends Protocol {
             Message rsp_msg=new Message(dest, buffer).putHeader(id, new CounterHeader());
             if(bypass_bundling)
                 rsp_msg.setFlag(Message.Flag.DONT_BUNDLE);
-            down_prot.down(new Event(Event.MSG, rsp_msg));
+            down_prot.down(rsp_msg);
         }
         catch(Exception ex) {
             log.error(Util.getMessage("FailedSendingMessageTo") + dest + ": " + ex);
@@ -502,7 +506,8 @@ public class COUNTER extends Protocol {
     }
 
     protected static Buffer streamableToBuffer(byte req_or_rsp, byte type, Streamable obj) throws Exception {
-        ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(100);
+        int expected_size=obj instanceof SizeStreamable? ((SizeStreamable)obj).serializedSize() : 100;
+        ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(expected_size);
         out.writeByte(req_or_rsp);
         out.writeByte(type);
         obj.writeTo(out);
@@ -904,7 +909,6 @@ public class COUNTER extends Protocol {
 
         public void readFrom(DataInput in) throws Exception {
             int len=in.readInt();
-            if(len == 0) return;
             names=readReconciliationNames(in, len);
             values=readReconciliationLongs(in, len);
             versions=readReconciliationLongs(in,len);
@@ -1076,7 +1080,6 @@ public class COUNTER extends Protocol {
 
         public void readFrom(DataInput in) throws Exception {
             int len=in.readInt();
-            if(len == 0) return;
             names=readReconciliationNames(in, len);
             values=readReconciliationLongs(in, len);
             versions=readReconciliationLongs(in,len);
@@ -1091,7 +1094,9 @@ public class COUNTER extends Protocol {
 
 
     public static class CounterHeader extends Header {
-        public int size() {return 0;}
+        public Supplier<? extends Header> create() {return CounterHeader::new;}
+        public short getMagicId() {return 74;}
+        public int serializedSize() {return 0;}
         public void writeTo(DataOutput out) throws Exception {}
         public void readFrom(DataInput in) throws Exception {}
     }

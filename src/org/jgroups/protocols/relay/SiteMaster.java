@@ -5,6 +5,7 @@ import org.jgroups.util.UUID;
 import org.jgroups.util.Util;
 
 import java.util.Arrays;
+import java.util.function.Supplier;
 
 /**
  * Special address with the UUID part being 0: identifies the current (relay) coordinator of a given site. E,g, if we
@@ -14,10 +15,9 @@ import java.util.Arrays;
  * @since 3.2
  */
 public class SiteMaster extends SiteUUID {
-    private static final long serialVersionUID=-6147979304449032483L;
 
     public SiteMaster() {
-        setFlag(site_master);
+        setFlag(RELAY2.site_master_flag);
     }
 
     public SiteMaster(String site) {
@@ -26,7 +26,11 @@ public class SiteMaster extends SiteUUID {
 
     public SiteMaster(byte[] site) {
         super(0, 0, null, site);
-        setFlag(site_master);
+        setFlag(RELAY2.site_master_flag);
+    }
+
+    public Supplier<? extends UUID> create() {
+        return SiteMaster::new;
     }
 
     public int compareTo(Address other) {

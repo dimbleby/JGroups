@@ -15,8 +15,8 @@ import java.util.*;
  * @author Bela Ban
  */
 public class Membership {
-    /* private vector to hold all the addresses */
-    private final List<Address> members=new LinkedList<>();
+    /* holds all addresses */
+    protected final List<Address> members=new LinkedList<>();
 
     
    /**
@@ -27,17 +27,20 @@ public class Membership {
 
 
    /**
-    * Creates a Membership with a given initial members. The Address references are copied out of
-    * the vector, so that the vector passed in as parameters is not the same reference as the vector
-    * that the membership class is using
-    * 
-    * @param initial_members
-    *           - a list of members that belong to this membership
+    * Creates a Membership with a given initial members. The Address references are copied out of the list, so that
+    * the list passed in as parameters is not the same reference as the list that the membership class uses
+    * @param initial_members a list of members that belong to this membership
     */
     public Membership(Collection<Address> initial_members) {
         if(initial_members != null)
             add(initial_members);
     }
+
+    public Membership(Address ... initial_members) {
+        if(initial_members != null)
+            add(initial_members);
+    }
+
 
 
 

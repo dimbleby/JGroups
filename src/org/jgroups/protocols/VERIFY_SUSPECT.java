@@ -6,18 +6,22 @@ import org.jgroups.annotations.LocalAddress;
 import org.jgroups.annotations.MBean;
 import org.jgroups.annotations.ManagedAttribute;
 import org.jgroups.annotations.Property;
-import org.jgroups.conf.PropertyConverters;
 import org.jgroups.stack.IpAddress;
 import org.jgroups.stack.Protocol;
 import org.jgroups.util.Util;
 
-import java.io.*;
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
-import java.util.*;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.DelayQueue;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 
 /**
@@ -50,11 +54,7 @@ public class VERIFY_SUSPECT extends Protocol implements Runnable {
               systemProperty={Global.BIND_ADDR})
     protected InetAddress bind_addr; // interface for ICMP pings
     
-    @Property(name="bind_interface", converter=PropertyConverters.BindInterface.class, 
-    		description="The interface (NIC) which should be used by this transport", dependsUpon="bind_addr")
-    protected String    bind_interface_str=null;
-     
-    /* --------------------------------------------- Fields ------------------------------------------------ */   
+    /* --------------------------------------------- Fields ------------------------------------------------ */
     
     
     /** network interface to be used to send the ICMP packets */
@@ -82,10 +82,10 @@ public class VERIFY_SUSPECT extends Protocol implements Runnable {
     public Object down(Event evt) {
         switch(evt.getType()) {
             case Event.SET_LOCAL_ADDRESS:
-                local_addr=(Address)evt.getArg();
+                local_addr=evt.getArg();
                 break;
             case Event.VIEW_CHANGE:
-                View v=(View)evt.getArg();
+                View v=evt.getArg();
                 adjustSuspectedMembers(v.getMembers());
                 break;
         }
@@ -96,7 +96,7 @@ public class VERIFY_SUSPECT extends Protocol implements Runnable {
         switch(evt.getType()) {
 
             case Event.SUSPECT:  // it all starts here ...
-                Address suspected_mbr=(Address)evt.getArg();
+                Address suspected_mbr=evt.getArg();
                 if(suspected_mbr == null) {
                     if(log.isErrorEnabled()) log.error(Util.getMessage("SuspectedMemberIsNull"));
                     return null;
@@ -114,45 +114,43 @@ public class VERIFY_SUSPECT extends Protocol implements Runnable {
                     verifySuspectWithICMP(suspected_mbr);
                 return null;  // don't pass up; we will decide later (after verification) whether to pass it up
 
-
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                VerifyHeader hdr=(VerifyHeader)msg.getHeader(this.id);
-                if(hdr == null)
-                    break;
-                switch(hdr.type) {
-                    case VerifyHeader.ARE_YOU_DEAD:
-                        if(hdr.from == null) {
-                            if(log.isErrorEnabled()) log.error(Util.getMessage("AREYOUDEADHdrFromIsNull"));
-                        }
-                        else {
-                            Message rsp;
-                            Address target=use_mcast_rsps? null : hdr.from;
-                            for(int i=0; i < num_msgs; i++) {
-                                rsp=new Message(target).setFlag(Message.Flag.INTERNAL)
-                                  .putHeader(this.id, new VerifyHeader(VerifyHeader.I_AM_NOT_DEAD, local_addr));
-                                down_prot.down(new Event(Event.MSG, rsp));
-                            }
-                        }
-                        return null;
-                    case VerifyHeader.I_AM_NOT_DEAD:
-                        if(hdr.from == null) {
-                            if(log.isErrorEnabled()) log.error(Util.getMessage("IAMNOTDEADHdrFromIsNull"));
-                            return null;
-                        }
-                        unsuspect(hdr.from);
-                        return null;
-                }
-                return null;
-
-
             case Event.CONFIG:
                 if(bind_addr == null) {
-                    Map<String,Object> config=(Map<String,Object>)evt.getArg();
+                    Map<String,Object> config=evt.getArg();
                     bind_addr=(InetAddress)config.get("bind_addr");
                 }
         }
         return up_prot.up(evt);
+    }
+
+    public Object up(Message msg) {
+        VerifyHeader hdr=msg.getHeader(this.id);
+        if(hdr == null)
+            return up_prot.up(msg);
+        switch(hdr.type) {
+            case VerifyHeader.ARE_YOU_DEAD:
+                if(hdr.from == null) {
+                    if(log.isErrorEnabled()) log.error(Util.getMessage("AREYOUDEADHdrFromIsNull"));
+                }
+                else {
+                    Message rsp;
+                    Address target=use_mcast_rsps? null : hdr.from;
+                    for(int i=0; i < num_msgs; i++) {
+                        rsp=new Message(target).setFlag(Message.Flag.INTERNAL)
+                          .putHeader(this.id, new VerifyHeader(VerifyHeader.I_AM_NOT_DEAD, local_addr));
+                        down_prot.down(rsp);
+                    }
+                }
+                return null;
+            case VerifyHeader.I_AM_NOT_DEAD:
+                if(hdr.from == null) {
+                    if(log.isErrorEnabled()) log.error(Util.getMessage("IAMNOTDEADHdrFromIsNull"));
+                    return null;
+                }
+                unsuspect(hdr.from);
+                return null;
+        }
+        return null;
     }
 
     /**
@@ -211,7 +209,7 @@ public class VERIFY_SUSPECT extends Protocol implements Runnable {
         for(int i=0; i < num_msgs; i++) {
             msg=new Message(mbr).setFlag(Message.Flag.INTERNAL)
               .putHeader(this.id, new VerifyHeader(VerifyHeader.ARE_YOU_DEAD, local_addr));
-            down_prot.down(new Event(Event.MSG, msg));
+            down_prot.down(msg);
         }               
     }
 
@@ -357,6 +355,9 @@ public class VERIFY_SUSPECT extends Protocol implements Runnable {
             this.from=from;
         }
 
+        public short getMagicId() {return 54;}
+
+        public Supplier<? extends Header> create() {return VerifyHeader::new;}
 
         public String toString() {
             switch(type) {
@@ -380,7 +381,7 @@ public class VERIFY_SUSPECT extends Protocol implements Runnable {
             from=Util.readAddress(in);
         }
 
-        public int size() {
+        public int serializedSize() {
             return Global.SHORT_SIZE + Util.size(from);
         }
     }

@@ -4,8 +4,7 @@ import org.jgroups.Address;
 import org.jgroups.Message;
 
 import java.util.*;
-import java.util.function.BiFunction;
-import java.util.function.Predicate;
+import java.util.function.*;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
@@ -38,8 +37,8 @@ public class MessageBatch implements Iterable<Message> {
     protected Mode             mode=Mode.REG;
 
     protected static final int INCR=5; // number of elements to add when resizing
-    protected static final     BiFunction<Message,MessageBatch,Integer> length_visitor=(msg, batch) -> msg != null? msg.getLength() : 0;
-    protected static final     BiFunction<Message,MessageBatch,Long>    total_size_visitor=(msg, batch) -> msg != null? msg.size() : 0;
+    protected static final     ToIntBiFunction<Message,MessageBatch>  length_visitor=(msg, batch) -> msg != null? msg.getLength() : 0;
+    protected static final     ToLongBiFunction<Message,MessageBatch> total_size_visitor=(msg, batch) -> msg != null? msg.size() : 0;
 
 
     public MessageBatch(int capacity) {
@@ -81,16 +80,28 @@ public class MessageBatch implements Iterable<Message> {
         this.mode=mode;
     }
 
-    public Address      dest()                        {return dest;}
-    public MessageBatch dest(Address dest)            {this.dest=dest; return this;}
-    public Address      sender()                      {return sender;}
-    public MessageBatch sender(Address sender)        {this.sender=sender; return this;}
-    public AsciiString  clusterName()                 {return cluster_name;}
-    public MessageBatch clusterName(AsciiString name) {this.cluster_name=name; return this;}
-    public boolean      multicast()                   {return multicast;}
-    public Mode         mode()                        {return mode;}
-    public MessageBatch mode(Mode mode)               {this.mode=mode; return this;}
-    public int          capacity()                    {return messages.length;}
+    public Address      getDest()                        {return dest;}
+    public Address      dest()                           {return dest;}
+    public MessageBatch setDest(Address dest)            {this.dest=dest; return this;}
+    public MessageBatch dest(Address dest)               {this.dest=dest; return this;}
+    public Address      getSender()                      {return sender;}
+    public Address      sender()                         {return sender;}
+    public MessageBatch setSender(Address sender)        {this.sender=sender; return this;}
+    public MessageBatch sender(Address sender)           {this.sender=sender; return this;}
+    public AsciiString  getClusterName()                 {return cluster_name;}
+    public AsciiString  clusterName()                    {return cluster_name;}
+    public MessageBatch setClusterName(AsciiString name) {this.cluster_name=name; return this;}
+    public MessageBatch clusterName(AsciiString name)    {this.cluster_name=name; return this;}
+    public boolean      isMulticast()                    {return multicast;}
+    public boolean      multicast()                      {return multicast;}
+    public MessageBatch multicast(boolean flag)          {multicast=flag; return this;}
+    public Mode         getMode()                        {return mode;}
+    public Mode         mode()                           {return mode;}
+    public MessageBatch setMode(Mode mode)               {this.mode=mode; return this;}
+    public MessageBatch mode(Mode mode)                  {this.mode=mode; return this;}
+    public int          getCapacity()                    {return messages.length;}
+    public int          capacity()                       {return messages.length;}
+    public int          index()                          {return index;}
 
 
     /** Returns the underlying message array. This is only intended for testing ! */
@@ -113,11 +124,54 @@ public class MessageBatch implements Iterable<Message> {
     }
 
     public MessageBatch add(final Message msg) {
-        if(msg == null) return this;
-        if(index >= messages.length)
-            resize();
-        messages[index++]=msg;
+        add(msg, true);
         return this;
+    }
+
+    /** Adds a message to the table
+     * @param msg the message
+     * @param resize whether or not to resize the table. If true, the method will always return 1
+     * @return always 1 if resize==true, else 1 if the message was added or 0 if not
+     */
+    public int add(final Message msg, boolean resize) {
+        if(msg == null) return 0;
+        if(index >= messages.length) {
+            if(!resize)
+                return 0;
+            resize();
+        }
+        messages[index++]=msg;
+        return 1;
+    }
+
+    public MessageBatch add(final MessageBatch batch) {
+        add(batch, true);
+        return this;
+    }
+
+    /**
+     * Adds another batch to this one
+     * @param batch the batch to add to this batch
+     * @param resize when true, this batch will be resized to accommodate the other batch
+     * @return the number of messages from the other batch that were added successfully. Will always be batch.size()
+     * unless resize==0: in this case, the number of messages that were added successfully is returned
+     */
+    public int add(final MessageBatch batch, boolean resize) {
+        if(batch == null) return 0;
+        if(this == batch)
+            throw new IllegalArgumentException("cannot add batch to itself");
+        int batch_size=batch.size();
+        if(index+batch_size >= messages.length && resize)
+            resize(messages.length + batch_size + 1);
+
+        int cnt=0;
+        for(Message msg: batch) {
+            if(index >= messages.length)
+                return cnt;
+            messages[index++]=msg;
+            cnt++;
+        }
+        return cnt;
     }
 
     /**
@@ -147,16 +201,54 @@ public class MessageBatch implements Iterable<Message> {
      * @return the MessageBatch
      */
     public MessageBatch replace(Predicate<Message> filter, Message replacement, boolean match_all) {
+        replaceIf(filter, replacement, match_all);
+        return this;
+    }
+
+    /**
+     * Replaces all messages that match a given filter with a replacement message
+     * @param filter the filter. If null, no changes take place. Note that filter needs to be able to handle null msgs
+     * @param replacement the replacement message. Can be null, which essentially removes all messages matching filter
+     * @param match_all whether to replace the first or all matches
+     * @return the number of matched messages
+     */
+    public int replaceIf(Predicate<Message> filter, Message replacement, boolean match_all) {
         if(filter == null)
-            return this;
+            return 0;
+        int matched=0;
         for(int i=0; i < index; i++) {
             if(filter.test(messages[i])) {
                 messages[i]=replacement;
+                matched++;
                 if(!match_all)
                     break;
             }
         }
-        return this;
+        return matched;
+    }
+
+    /**
+     * Transfers messages from other to this batch. Optionally clears the other batch after the transfer
+     * @param other the other batch
+     * @param clear If true, the transferred messages are removed from the other batch
+     * @return the number of transferred messages (may be 0 if the other batch was empty)
+     */
+    public int transferFrom(MessageBatch other, boolean clear) {
+        if(other == null || this == other)
+            return 0;
+        int capacity=messages.length, other_size=other.size();
+        if(other_size == 0)
+            return 0;
+        if(capacity < other_size)
+            messages=new Message[other_size];
+        System.arraycopy(other.messages, 0, this.messages, 0, other_size);
+        if(this.index > other_size)
+            for(int i=other_size; i < this.index; i++)
+                messages[i]=null;
+        this.index=other_size;
+        if(clear)
+            other.clear();
+        return other_size;
     }
 
     /**
@@ -180,6 +272,11 @@ public class MessageBatch implements Iterable<Message> {
     public MessageBatch clear() {
         for(int i=0; i < index; i++)
             messages[i]=null;
+        index=0;
+        return this;
+    }
+
+    public MessageBatch reset() {
         index=0;
         return this;
     }
@@ -213,6 +310,16 @@ public class MessageBatch implements Iterable<Message> {
             }
         }
         return retval;
+    }
+
+    public void forEach(BiConsumer<Message,MessageBatch> consumer) {
+        for(int i=0; i < index; i++) {
+            try {
+                consumer.accept(messages[i], this);
+            }
+            catch(Throwable t) {
+            }
+        }
     }
 
 
@@ -258,7 +365,7 @@ public class MessageBatch implements Iterable<Message> {
     public long totalSize() {
         long retval=0;
         for(int i=0; i < index; i++)
-            retval+=total_size_visitor.apply(messages[i], this);
+            retval+=total_size_visitor.applyAsLong(messages[i], this);
         return retval;
     }
 
@@ -266,7 +373,7 @@ public class MessageBatch implements Iterable<Message> {
     public int length() {
         int retval=0;
         for(int i=0; i < index; i++)
-            retval+=length_visitor.apply(messages[i], this);
+            retval+=length_visitor.applyAsInt(messages[i], this);
         return retval;
     }
 
@@ -309,11 +416,16 @@ public class MessageBatch implements Iterable<Message> {
     }
 
     protected void resize() {
-        Message[] tmp=new Message[messages.length + INCR];
+        resize(messages.length + INCR);
+    }
+
+    protected void resize(int new_capacity) {
+        if(new_capacity <= messages.length)
+            return;
+        Message[] tmp=new Message[new_capacity];
         System.arraycopy(messages,0,tmp,0,messages.length);
         messages=tmp;
     }
-
 
 
     public enum Mode {OOB, REG, INTERNAL, MIXED}

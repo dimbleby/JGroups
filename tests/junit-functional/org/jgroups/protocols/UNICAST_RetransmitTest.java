@@ -29,7 +29,7 @@ public class UNICAST_RetransmitTest {
         change(a, b);
         a.connect("UNICAST_RetransmitTest");
         b.connect("UNICAST_RetransmitTest");
-        Util.waitUntilAllChannelsHaveSameSize(10000, 500, a, b);
+        Util.waitUntilAllChannelsHaveSameView(10000, 500, a, b);
     }
 
     @AfterMethod
@@ -78,11 +78,10 @@ public class UNICAST_RetransmitTest {
         for(JChannel ch: channels) {
             TP transport=ch.getProtocolStack().getTransport();
             transport.setMaxBundleSize(MAX_BUNDLE_SIZE);
-            UNICAST3 ucast=(UNICAST3)ch.getProtocolStack().findProtocol(UNICAST3.class);
+            UNICAST3 ucast=ch.getProtocolStack().findProtocol(UNICAST3.class);
             if(ucast == null)
                 throw new IllegalStateException("UNICAST3 not present in the stack");
             ucast.setValue("max_xmit_req_size", 5000);
-            ucast.setValue("max_msg_batch_size", 2000);
         }
     }
 
@@ -91,7 +90,7 @@ public class UNICAST_RetransmitTest {
         protected final List<Integer> list=new ArrayList<>();
 
         public void receive(Message msg) {
-            Integer num=(Integer)msg.getObject();
+            Integer num=msg.getObject();
             list.add(num);
         }
 
@@ -101,21 +100,21 @@ public class UNICAST_RetransmitTest {
 
     protected void stopRetransmission(JChannel ... channels) {
         for(JChannel ch: channels) {
-            UNICAST3 ucast=(UNICAST3)ch.getProtocolStack().findProtocol(UNICAST3.class);
+            UNICAST3 ucast=ch.getProtocolStack().findProtocol(UNICAST3.class);
             ucast.stopRetransmitTask();
         }
     }
 
     protected void startRetransmission(JChannel ... channels) {
         for(JChannel ch: channels) {
-            UNICAST3 ucast=(UNICAST3)ch.getProtocolStack().findProtocol(UNICAST3.class);
+            UNICAST3 ucast=ch.getProtocolStack().findProtocol(UNICAST3.class);
             ucast.startRetransmitTask();
         }
     }
 
     protected static void insertDiscardProtocol(JChannel ch) {
         ProtocolStack stack=ch.getProtocolStack();
-        stack.insertProtocolInStack(new DiscardEveryOtherUnicastMessage(), stack.getTransport(), ProtocolStack.ABOVE);
+        stack.insertProtocolInStack(new DiscardEveryOtherUnicastMessage(), stack.getTransport(), ProtocolStack.Position.ABOVE);
     }
 
     protected static void removeDiscardProtocol(JChannel ch) {
@@ -133,16 +132,13 @@ public class UNICAST_RetransmitTest {
     protected static class DiscardEveryOtherUnicastMessage extends Protocol {
         protected boolean discard=false;
 
-        public Object down(Event evt) {
-            if(evt.getType() == Event.MSG) {
-                Message msg=(Message)evt.getArg();
-                if(msg.dest() != null) {
-                    discard=!discard;
-                    if(discard)
-                        return null;
-                }
+        public Object down(Message msg) {
+            if(msg.dest() != null) {
+                discard=!discard;
+                if(discard)
+                    return null;
             }
-            return down_prot.down(evt);
+            return down_prot.down(msg);
         }
     }
 

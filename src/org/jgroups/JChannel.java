@@ -166,8 +166,32 @@ public class JChannel implements Closeable {
      * might lead to problems !
      * @param protocols The list of protocols, from bottom to top, ie. the first protocol in the list is the transport,
      *                  the last the top protocol
+     * @deprecated Use {@link JChannel#JChannel(List)} instead
      */
+    @Deprecated
     public JChannel(Collection<Protocol> protocols) throws Exception {
+        prot_stack=new ProtocolStack().setChannel(this);
+        for(Protocol prot: protocols) {
+            prot_stack.addProtocol(prot);
+            prot.setProtocolStack(prot_stack);
+        }
+        prot_stack.init();
+
+        // Substitute vars with defined system props (if any)
+        List<Protocol> prots=prot_stack.getProtocols();
+        Map<String,String> map=new HashMap<>();
+        for(Protocol prot: prots)
+            Configurator.resolveAndAssignFields(prot, map);
+    }
+
+    /**
+     * Creates a channel from a list of protocols. Note that after a {@link org.jgroups.JChannel#close()}, the protocol
+     * list <em>should not</em> be reused, ie. new JChannel(protocols) would reuse the same protocol list, and this
+     * might lead to problems !
+     * @param protocols The list of protocols, from bottom to top, ie. the first protocol in the list is the transport,
+     *                  the last the top protocol
+     */
+    public JChannel(List<Protocol> protocols) throws Exception {
         prot_stack=new ProtocolStack().setChannel(this);
         for(Protocol prot: protocols) {
             prot_stack.addProtocol(prot);
@@ -197,17 +221,23 @@ public class JChannel implements Closeable {
     public JChannel      setReceiver(Receiver r)             {receiver=r; return this;}
     public JChannel      receiver(Receiver r)                {return setReceiver(r);}
     public Address       getAddress()                        {return state == State.CLOSED ? null : local_addr;}
+    public Address       address()                           {return state == State.CLOSED ? null : local_addr;}
     public String        getName()                           {return name;}
     public String        name()                              {return name;}
     public JChannel      name(String name)                   {return setName(name);}
+    public String        clusterName()                       {return getClusterName();}
     public View          getView()                           {return state == State.CONNECTED ? view : null;}
+    public View          view()                              {return state == State.CONNECTED ? view : null;}
     public ProtocolStack getProtocolStack()                  {return prot_stack;}
+    public ProtocolStack stack()                             {return prot_stack;}
     public UpHandler     getUpHandler()                      {return up_handler;}
     public JChannel      setUpHandler(UpHandler h)           {this.up_handler=h; return this;}
-    public boolean       statsEnabled()                      {return stats;}
-    public JChannel      enableStats(boolean stats)          {this.stats=stats; return this;}
-    public JChannel      setDiscardOwnMessages(boolean flag) {discard_own_messages=flag; return this;}
+    public boolean       getStats()                          {return stats;}
+    public boolean       stats()                             {return stats;}
+    public JChannel      setStats(boolean stats)             {this.stats=stats; return this;}
+    public JChannel      stats(boolean stats)                {this.stats=stats; return this;}
     public boolean       getDiscardOwnMessages()             {return discard_own_messages;}
+    public JChannel      setDiscardOwnMessages(boolean flag) {discard_own_messages=flag; return this;}
     public boolean       flushSupported()                    {return flush_supported;}
 
 
@@ -227,7 +257,7 @@ public class JChannel implements Closeable {
                 throw new IllegalStateException("name cannot be set if channel is connected (should be done before)");
             this.name=name;
             if(local_addr != null)
-                UUID.add(local_addr, this.name);
+                NameCache.add(local_addr, this.name);
         }
         return this;
     }
@@ -359,8 +389,7 @@ public class JChannel implements Closeable {
     protected synchronized JChannel connect(String cluster_name, boolean useFlushIfPresent) throws Exception {
         if(!_preConnect(cluster_name))
             return this;
-        Event connect_event=useFlushIfPresent? new Event(Event.CONNECT_USE_FLUSH, cluster_name)
-          : new Event(Event.CONNECT, cluster_name);
+        Event connect_event=new Event(useFlushIfPresent? Event.CONNECT_USE_FLUSH : Event.CONNECT, cluster_name);
         _connect(connect_event);
         state=State.CONNECTED;
         notifyChannelConnected(this);
@@ -407,8 +436,7 @@ public class JChannel implements Closeable {
 
         boolean canFetchState=false;
         try {
-            Event connect_event=useFlushIfPresent? new Event(Event.CONNECT_WITH_STATE_TRANSFER_USE_FLUSH, cluster_name)
-              : new Event(Event.CONNECT_WITH_STATE_TRANSFER, cluster_name);
+            Event connect_event=new Event(useFlushIfPresent? Event.CONNECT_WITH_STATE_TRANSFER_USE_FLUSH : Event.CONNECT_WITH_STATE_TRANSFER, cluster_name);
             _connect(connect_event);
             state=State.CONNECTED;
             notifyChannelConnected(this);
@@ -482,10 +510,10 @@ public class JChannel implements Closeable {
      * @exception IllegalStateException thrown if the channel is disconnected or closed
      */
     public JChannel send(Message msg) throws Exception {
-        checkClosedOrNotConnected();
         if(msg == null)
             throw new NullPointerException("msg is null");
-        down(new Event(Event.MSG, msg));
+        checkClosedOrNotConnected();
+        down(msg);
         return this;
     }
 
@@ -637,11 +665,16 @@ public class JChannel implements Closeable {
      */
     public Object down(Event evt) {
         if(evt == null) return null;
-        if(stats && evt.getType() == Event.MSG) {
-            sent_msgs++;
-            sent_bytes+=((Message)evt.getArg()).getLength();
-        }
         return prot_stack.down(evt);
+    }
+
+    public Object down(Message msg) {
+        if(msg == null) return null;
+        if(stats) {
+            sent_msgs++;
+            sent_bytes+=msg.getLength();
+        }
+        return prot_stack.down(msg);
     }
 
 
@@ -652,21 +685,8 @@ public class JChannel implements Closeable {
      */
     public Object up(Event evt) {
         switch(evt.getType()) {
-
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                if(stats) {
-                    received_msgs++;
-                    received_bytes+=msg.getLength();
-                }
-
-                // discard local messages (sent by myself to me)
-                if(discard_own_messages && local_addr != null && msg.getSrc() != null && local_addr.equals(msg.getSrc()))
-                    return null;
-                break;
-
             case Event.VIEW_CHANGE:
-                View tmp=(View)evt.getArg();
+                View tmp=evt.getArg();
                 if(tmp instanceof MergeView)
                     view=new View(tmp.getViewId(), tmp.getMembers());
                 else
@@ -683,7 +703,7 @@ public class JChannel implements Closeable {
                 break;
 
             case Event.CONFIG:
-                Map<String,Object> cfg=(Map<String,Object>)evt.getArg();
+                Map<String,Object> cfg=evt.getArg();
                 if(cfg != null) {
                     if(cfg.containsKey("state_transfer")) {
                         state_transfer_supported=(Boolean)cfg.get("state_transfer");
@@ -695,7 +715,7 @@ public class JChannel implements Closeable {
                 break;
                 
             case Event.GET_STATE_OK:
-                StateTransferResult result=(StateTransferResult)evt.getArg();
+                StateTransferResult result=evt.getArg();
                 if(up_handler != null) {
                     try {
                         Object retval=up_handler.up(evt);
@@ -723,7 +743,7 @@ public class JChannel implements Closeable {
                 break;
 
             case Event.STATE_TRANSFER_INPUTSTREAM_CLOSED:
-                state_promise.setResult((StateTransferResult)evt.getArg());
+                state_promise.setResult(evt.getArg());
                 break;
 
             case Event.STATE_TRANSFER_INPUTSTREAM:
@@ -733,7 +753,7 @@ public class JChannel implements Closeable {
                 if(up_handler != null)
                     return up_handler.up(evt);
 
-                InputStream is=(InputStream)evt.getArg();
+                InputStream is=evt.getArg();
                 if(is != null && receiver != null) {
                     try {
                         receiver.setState(is);
@@ -747,7 +767,7 @@ public class JChannel implements Closeable {
             case Event.STATE_TRANSFER_OUTPUTSTREAM:
                 if(receiver != null && evt.getArg() != null) {
                     try {
-                        receiver.getState((OutputStream)evt.getArg());
+                        receiver.getState(evt.getArg());
                     }
                     catch(Exception e) {
                         throw new RuntimeException("failed calling getState() in state provider", e);
@@ -757,6 +777,15 @@ public class JChannel implements Closeable {
 
             case Event.GET_LOCAL_ADDRESS:
                 return local_addr;
+
+            case Event.SET_LOCAL_ADDRESS:
+                Address tmp_addr=evt.arg();
+                if(tmp_addr != null) {
+                    this.local_addr=tmp_addr;
+                    if(name != null && !name.isEmpty())
+                        NameCache.add(local_addr, name);
+                }
+                break;
 
             default:
                 break;
@@ -769,6 +798,25 @@ public class JChannel implements Closeable {
 
         if(receiver != null)
             return invokeCallback(evt.getType(), evt.getArg());
+        return null;
+    }
+
+    public Object up(Message msg) {
+        if(stats) {
+            received_msgs++;
+            received_bytes+=msg.getLength();
+        }
+
+        // discard local messages (sent by myself to me)
+        if(discard_own_messages && local_addr != null && msg.getSrc() != null && local_addr.equals(msg.getSrc()))
+            return null;
+
+        // If UpHandler is installed, pass all events to it and return (UpHandler is e.g. a building block)
+        if(up_handler != null)
+            return up_handler.up(msg);
+
+        if(receiver != null)
+            receiver.receive(msg);
         return null;
     }
 
@@ -853,7 +901,7 @@ public class JChannel implements Closeable {
             stopStack(true, false);
             state=State.OPEN;
             init();
-            throw new Exception("connecting to channel \"" + connect_event.getArg() + "\" failed", t);
+            throw new Exception("connecting to channel " + connect_event.getArg() + " failed", t);
         }
     }
 
@@ -904,9 +952,6 @@ public class JChannel implements Closeable {
 
     protected Object invokeCallback(int type, Object arg) {
         switch(type) {
-            case Event.MSG:
-                receiver.receive((Message)arg);
-                break;
             case Event.VIEW_CHANGE:
                 receiver.viewAccepted((View)arg);
                 break;
@@ -966,7 +1011,6 @@ public class JChannel implements Closeable {
 
 
     protected JChannel startStack(String cluster_name) throws Exception {
-        /*make sure the channel is not closed*/
         checkClosed();
 
         this.cluster_name=cluster_name;
@@ -980,7 +1024,7 @@ public class JChannel implements Closeable {
     }
 
     /**
-     * Generates new UUID and sets local address. Sends down a REMOVE_ADDRESS (if existing address was present) and
+     * Generates and sets local_addr. Sends down a REMOVE_ADDRESS (if existing address was present) and
      * a SET_LOCAL_ADDRESS
      */
     protected JChannel setAddress() {
@@ -991,7 +1035,7 @@ public class JChannel implements Closeable {
         if(name == null || name.isEmpty()) // generate a logical name if not set
             name=Util.generateLocalName();
         if(name != null && !name.isEmpty())
-            UUID.add(local_addr, name);
+            NameCache.add(local_addr, name);
 
         Event evt=new Event(Event.SET_LOCAL_ADDRESS, local_addr);
         down(evt);
@@ -1038,9 +1082,10 @@ public class JChannel implements Closeable {
     }
 
     protected JChannel checkClosedOrNotConnected() {
-        if(state == State.CLOSED)
+        State tmp=state;
+        if(tmp == State.CLOSED)
             throw new IllegalStateException("channel is closed");
-        if(!(state == State.CONNECTING || state == State.CONNECTED))
+        if(!(tmp == State.CONNECTING || tmp == State.CONNECTED))
             throw new IllegalStateException("channel is disconnected");
         return this;
     }
@@ -1057,7 +1102,7 @@ public class JChannel implements Closeable {
         notifyChannelClosed(this);
         init(); // sets local_addr=null; changed March 18 2003 (bela) -- prevented successful rejoining
         if(old_addr != null)
-            UUID.remove(old_addr);
+            NameCache.remove(old_addr);
         return this;
     }
 
@@ -1082,12 +1127,7 @@ public class JChannel implements Closeable {
     }
 
     protected Address determineCoordinator() {
-        List<Address> mbrs=view != null? view.getMembers() : null;
-        if(mbrs == null)
-            return null;
-        if(!mbrs.isEmpty())
-            return mbrs.iterator().next();
-        return null;
+        return view != null? view.getCoord() : null;
     }
 
     protected TimeScheduler getTimer() {
@@ -1115,7 +1155,7 @@ public class JChannel implements Closeable {
     protected JChannel notifyListeners(Consumer<ChannelListener> func, String msg) {
         if(channel_listeners != null) {
             try {
-                channel_listeners.forEach(func::accept);
+                channel_listeners.forEach(func);
             }
             catch(Throwable t) {
                 log.error(Util.getMessage("CallbackException"), msg, t);

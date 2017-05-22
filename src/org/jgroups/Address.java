@@ -1,10 +1,8 @@
 
 package org.jgroups;
 
-import org.jgroups.util.Streamable;
+import org.jgroups.util.SizeStreamable;
 import org.jgroups.util.UUID;
-
-import java.io.Externalizable;
 
 /**
  * Address identifies cluster member. For example, whenever a unicast message is sent in a cluster
@@ -18,15 +16,12 @@ import java.io.Externalizable;
  * @see PhysicalAddress
  * @see UUID
  */
-public interface Address extends Streamable, Comparable<Address>, Externalizable {
+public interface Address extends SizeStreamable, Comparable<Address> {
     // flags used for marshalling
-    byte NULL        = 1 << 0;
-    byte UUID_ADDR   = 1 << 1;
-    byte SITE_UUID   = 1 << 2;
-    byte SITE_MASTER = 1 << 3;
-    byte IP_ADDR     = 1 << 4;
-
-
-    /** Returns serialized size of this address */
-    int size();
+    byte NULL         = 1 << 0;
+    byte UUID_ADDR    = 1 << 1;
+    byte SITE_UUID    = 1 << 2;
+    byte SITE_MASTER  = 1 << 3;
+    byte IP_ADDR      = 1 << 4;
+    byte IP_ADDR_UUID = 1 << 5;
 }

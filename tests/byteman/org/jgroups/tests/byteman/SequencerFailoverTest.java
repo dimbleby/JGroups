@@ -33,7 +33,7 @@ public class SequencerFailoverTest extends BMNGRunner {
         a=createChannel(props, "A", GROUP);
         b=createChannel(props, "B", GROUP);
         c=createChannel(props, "C", GROUP);
-        Util.waitUntilAllChannelsHaveSameSize(10000, 1000, a,b,c);
+        Util.waitUntilAllChannelsHaveSameView(10000, 1000, a, b, c);
     }
 
     @AfterMethod
@@ -145,7 +145,7 @@ public class SequencerFailoverTest extends BMNGRunner {
         discard.setDiscardAll(true);
         ProtocolStack stack=a.getProtocolStack();
         TP transport=stack.getTransport();
-        stack.insertProtocol(discard,  ProtocolStack.ABOVE, transport.getClass());
+        stack.insertProtocol(discard,  ProtocolStack.Position.ABOVE, transport.getClass());
         
         MySender[] senders=new MySender[num_senders];
         for(int i=0; i < senders.length; i++) {
@@ -228,7 +228,7 @@ public class SequencerFailoverTest extends BMNGRunner {
         final Address sender=channel.getAddress();
         for(int i=1; i <= NUM_MSGS; i++) {
             Util.sleep(300);
-            channel.send(new Message(null, null,i));
+            channel.send(new Message(null, i));
             System.out.print("[" + sender + "] -- messages sent: " + i + "/" + NUM_MSGS + "\r");
         }
         System.out.println("");

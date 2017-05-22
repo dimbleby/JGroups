@@ -66,15 +66,15 @@ public class UNICAST_OOB_Test {
         ProtocolStack stack=a.getProtocolStack();
         Protocol neighbor=stack.findProtocol(Util.getUnicastProtocols());
         System.out.println("Found unicast protocol " + neighbor.getClass().getSimpleName());
-        stack.insertProtocolInStack(discard,neighbor,ProtocolStack.BELOW);
+        stack.insertProtocolInStack(discard,neighbor,ProtocolStack.Position.BELOW);
 
         a.connect("UNICAST_OOB_Test");
         b.connect("UNICAST_OOB_Test");
-        Util.waitUntilAllChannelsHaveSameSize(10000, 1000, a,b);
+        Util.waitUntilAllChannelsHaveSameView(10000, 1000, a, b);
 
         Address dest=b.getAddress();
         for(int i=1; i <=5; i++) {
-            Message msg=new Message(dest, null,(long)i);
+            Message msg=new Message(dest,(long)i);
             if(i == 4 && oob)
                 msg.setFlag(Message.Flag.OOB);
             System.out.println("-- sending message #" + i);
@@ -141,7 +141,7 @@ public class UNICAST_OOB_Test {
 
         public void receive(Message msg) {
             if(msg != null) {
-                Long num=(Long)msg.getObject();
+                Long num=msg.getObject();
                 System.out.println(">> received " + num);
                 seqnos.add(num);
             }

@@ -14,6 +14,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 /**
  * Forwards a message to the current coordinator. When the coordinator changes, forwards all pending messages to
@@ -80,7 +81,7 @@ public class FORWARD_TO_COORD extends Protocol {
                 Address target=coord;
                 if(target == null)
                     throw new IllegalStateException("coord is null; dropping message");
-                Message msg=(Message)evt.getArg();
+                Message msg=evt.getArg();
                 long msg_id=getNextId();
                 ForwardHeader hdr=new ForwardHeader(ForwardHeader.MSG, msg_id);
                 msg.putHeader(id, hdr);
@@ -91,11 +92,11 @@ public class FORWARD_TO_COORD extends Protocol {
                 return null; // FORWARD_TO_COORD is not passed down any further
 
             case Event.VIEW_CHANGE:
-                handleViewChange((View)evt.getArg());
+                handleViewChange(evt.getArg());
                 break;
 
             case Event.SET_LOCAL_ADDRESS:
-                local_addr=(Address)evt.getArg();
+                local_addr=evt.getArg();
                 fwd_queue.setLocalAddr(local_addr);
                 break;
         }
@@ -104,48 +105,49 @@ public class FORWARD_TO_COORD extends Protocol {
 
     public Object up(Event evt) {
         switch(evt.getType()) {
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                ForwardHeader hdr=(ForwardHeader)msg.getHeader(id);
-                if(hdr == null)
-                    break;
-                long msg_id=hdr.getId();
-                Address sender=msg.getSrc();
-                switch(hdr.getType()) {
-                    case ForwardHeader.MSG:
-                        if(local_addr != null && !local_addr.equals(coord)) {
-                            // I'm not the coord
-                            if(log.isWarnEnabled())
-                                log.warn(local_addr + ": received a message with id=" + msg_id + " from " + sender +
-                                           ", but I'm not coordinator (" + coord + " is); dropping the message");
-                            sendNotCoord(sender, msg_id);
-                            return null;
-                        }
-                        try {
-                            if(log.isTraceEnabled())
-                                log.trace(local_addr + ": received a message with id=" + msg_id + " from " + sender);
-                            fwd_queue.receive(msg_id, msg);
-                            return null;
-                        }
-                        finally {
-                            sendAck(sender, msg_id);
-                        }
-                    case ForwardHeader.ACK:
-                        fwd_queue.ack(msg_id);
-                        if(log.isTraceEnabled())
-                            log.trace(local_addr + ": received an ack from " + sender + " for " + msg_id);
-                        return null;
-                    case ForwardHeader.NOT_COORD:
-                        if(!received_not_coord)
-                            received_not_coord=true;
-                        return null;
-                }
-                break;
             case Event.VIEW_CHANGE:
-                handleViewChange((View)evt.getArg());
+                handleViewChange(evt.getArg());
                 break;
         }
         return up_prot.up(evt);
+    }
+
+
+    public Object up(Message msg) {
+        ForwardHeader hdr=msg.getHeader(id);
+        if(hdr == null)
+            return up_prot.up(msg);
+        long msg_id=hdr.getId();
+        Address sender=msg.getSrc();
+        switch(hdr.getType()) {
+            case ForwardHeader.MSG:
+                if(local_addr != null && !local_addr.equals(coord)) {
+                    // I'm not the coord
+                    log.warn(local_addr + ": received a message with id=" + msg_id + " from " + sender +
+                               ", but I'm not coordinator (" + coord + " is); dropping the message");
+                    sendNotCoord(sender, msg_id);
+                    return null;
+                }
+                try {
+                    if(log.isTraceEnabled())
+                        log.trace(local_addr + ": received a message with id=" + msg_id + " from " + sender);
+                    fwd_queue.receive(msg_id, msg);
+                    return null;
+                }
+                finally {
+                    sendAck(sender, msg_id);
+                }
+            case ForwardHeader.ACK:
+                fwd_queue.ack(msg_id);
+                if(log.isTraceEnabled())
+                    log.trace(local_addr + ": received an ack from " + sender + " for " + msg_id);
+                return null;
+            case ForwardHeader.NOT_COORD:
+                if(!received_not_coord)
+                    received_not_coord=true;
+                return null;
+        }
+        return null;
     }
 
 
@@ -175,7 +177,7 @@ public class FORWARD_TO_COORD extends Protocol {
     }
 
     protected void send(Address target, long ack_id, byte type) {
-        down_prot.down(new Event(Event.MSG, new Message(target).putHeader(id, new ForwardHeader(type, ack_id))));
+        down_prot.down(new Message(target).putHeader(id, new ForwardHeader(type, ack_id)));
     }
 
 
@@ -199,9 +201,11 @@ public class FORWARD_TO_COORD extends Protocol {
             this.id=id;
         }
 
+        public Supplier<? extends Header> create() {return ForwardHeader::new;}
+        public short getMagicId() {return 81;}
         public long getId()   {return id;}
         public byte getType() {return type;}
-        public int  size()    {return Global.BYTE_SIZE + Bits.size(id);}
+        public int serializedSize()    {return Global.BYTE_SIZE + Bits.size(id);}
 
         public void writeTo(DataOutput out) throws Exception {
             out.writeByte(type);

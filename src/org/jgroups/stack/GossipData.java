@@ -17,13 +17,14 @@ import java.util.List;
 
 
 /**
- * Encapsulates data sent between GossipRouter and GossipClient
+ * Encapsulates data sent between GossipRouter and RouterStub (TCPGOSSIP and TUNNEL)
  * @author Bela Ban Oct 4 2001
  */
 public class GossipData implements SizeStreamable {
     GossipType      type;
     String          group;         // REGISTER, GET_MBRS and GET_MBRS_RSP
     Address         addr;          // REGISTER
+    Address         sender;        // MESSAGE (original sender of a message (not the GossipRouter!))
     PhysicalAddress physical_addr; // REGISTER, GET_MBRS, GET_MBRS_RSP
     String          logical_name;  // REGISTER
     List<PingData>  ping_data;     // GET_MBRS_RSP
@@ -75,6 +76,8 @@ public class GossipData implements SizeStreamable {
     public GossipType       getType()            {return type;}
     public String           getGroup()           {return group;}
     public Address          getAddress()         {return addr;}
+    public Address          getSender()          {return sender;}
+    public GossipData       setSender(Address s) {sender=s; return this;}
     public String           getLogicalName()     {return logical_name;}
     public List<PingData>   getPingData()        {return ping_data;}
     public byte[]           getBuffer()          {return buffer;}
@@ -85,12 +88,11 @@ public class GossipData implements SizeStreamable {
         this.ping_data=mbrs;
     }
 
-    public GossipData addPingData(PingData data) {
+    public void addPingData(PingData data) {
         if(ping_data == null)
             ping_data=new ArrayList<>();
         if(data != null)
             ping_data.add(data);
-        return this;
     }
 
 
@@ -109,12 +111,13 @@ public class GossipData implements SizeStreamable {
         return sb.toString();
     }
 
-    public int size() {
+    public int serializedSize() {
         int retval=Global.BYTE_SIZE;   // type
         if(group != null)
             retval+=group.length() +2; // group
         retval+=Global.BYTE_SIZE;      // presence for group
         retval+=Util.size(addr);       // addr
+        retval+=Util.size(sender);
 
         if(type != GossipType.MESSAGE) {
             retval+=Global.BYTE_SIZE;     // presence byte for logical_name
@@ -124,7 +127,7 @@ public class GossipData implements SizeStreamable {
             retval+=Global.SHORT_SIZE;    // ping_data
             if(ping_data != null)
                 for(PingData data: ping_data)
-                    retval+=data.size();
+                    retval+=data.serializedSize();
 
             retval+=Util.size(physical_addr); // physical_addr
         }
@@ -140,6 +143,7 @@ public class GossipData implements SizeStreamable {
         out.writeByte(type.ordinal());
         Bits.writeString(group, out);
         Util.writeAddress(addr, out);
+        Util.writeAddress(sender, out);
 
         if(type != GossipType.MESSAGE) {
             Bits.writeString(logical_name, out);
@@ -157,9 +161,16 @@ public class GossipData implements SizeStreamable {
     }
 
     public void readFrom(DataInput in) throws Exception {
-        type=GossipType.values()[in.readByte()];
+        readFrom(in, true);
+    }
+
+
+    protected void readFrom(DataInput in, boolean read_type) throws Exception {
+        if(read_type)
+            type=GossipType.values()[in.readByte()];
         group=Bits.readString(in);
         addr=Util.readAddress(in);
+        sender=Util.readAddress(in);
 
         if(type != GossipType.MESSAGE) {
             logical_name=Bits.readString(in);
@@ -181,6 +192,7 @@ public class GossipData implements SizeStreamable {
             in.readFully(buffer, offset=0, length);
         }
     }
+
 
 
 }

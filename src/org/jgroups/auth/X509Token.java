@@ -41,43 +41,33 @@ import java.security.cert.X509Certificate;
  * </ul>
  * 
  * @author Chris Mills
+ * @author Bela Ban
  * @see org.jgroups.auth.AuthToken
  */
 public class X509Token extends AuthToken {
-
-    public static final String KEYSTORE_TYPE = "keystore_type";
-    public static final String KEYSTORE_PATH = "keystore_path";
-    public static final String KEYSTORE_PASSWORD = "keystore_password";
-    public static final String CERT_ALIAS = "cert_alias";
-    public static final String CERT_PASSWORD = "cert_password";
-    public static final String TOKEN_ATTR = "auth_value";
-    public static final String CIPHER_TYPE = "cipher_type";
-
-    private boolean valueSet = false;
+    private boolean         valueSet;
 
     @Property
-    protected String keystore_type = "JKS";
+    protected String        keystore_type = "JKS";
 
     @Property
-    protected String cert_alias = null;
+    protected String        cert_alias;
 
     @Property
-    protected String keystore_path = null;
+    protected String        keystore_path;
 
     @Property(exposeAsManagedAttribute=false)
-    protected String auth_value = null;
+    protected String        auth_value;
 
     @Property
-    protected String cipher_type = "RSA";
+    protected String        cipher_type = "RSA";
 
-    private byte[] encryptedToken = null;
-
-    private char[] cert_password = null;
-    private char[] keystore_password = null;
-
-    private Cipher cipher = null;
-    private PrivateKey certPrivateKey = null;
-    private X509Certificate certificate = null;
+    private byte[]          encryptedToken;
+    private char[]          cert_password;
+    private char[]          keystore_password;
+    private Cipher          cipher;
+    private PrivateKey      certPrivateKey;
+    private X509Certificate certificate;
 
     public X509Token() {
         // need an empty constructor
@@ -102,62 +92,42 @@ public class X509Token extends AuthToken {
     }
 
     public String getName() {
-        return "org.jgroups.auth.X509Token";
+        return X509Token.class.getName();
     }
 
     public boolean authenticate(AuthToken token, Message msg) {
         if (!this.valueSet) {
-            if (log.isErrorEnabled()) {
-                log.error(Util.getMessage("X509TokenNotSetupCorrectlyCheckTokenAttrs"));
-            }
+            log.error(Util.getMessage("X509TokenNotSetupCorrectlyCheckTokenAttrs"));
             return false;
         }
 
-        if ((token != null) && (token instanceof X509Token)) {
+        if (token instanceof X509Token) {
             // got a valid X509 token object
             X509Token serverToken = (X509Token) token;
             if (!serverToken.valueSet) {
-                if (log.isErrorEnabled()) {
-                    log.error(Util.getMessage("X509TokenReceivedTokenNotValid"));
-                }
+                log.error(Util.getMessage("X509TokenReceivedTokenNotValid"));
                 return false;
             }
 
             try {
-                if (log.isDebugEnabled()) {
-                    log.debug("setting cipher to decrypt mode");
-                }
                 this.cipher.init(Cipher.DECRYPT_MODE, this.certPrivateKey);
                 String serverBytes = new String(this.cipher.doFinal(serverToken.encryptedToken));
                 if ((serverBytes.equalsIgnoreCase(this.auth_value))) {
-                    if (log.isDebugEnabled()) {
-                        log.debug("X509 authentication passed");
-                    }
+                    log.debug("X509 authentication passed");
                     return true;
                 }
             } catch (Exception e) {
-                if (log.isErrorEnabled()) {
-                    log.error(e.toString());
-                }
+                log.error(e.toString());
             }
         }
-        // if(log.isWarnEnabled()){
-        // log.warn("X509 authentication failed");
-        // }
         return false;
     }
 
     public void writeTo(DataOutput out) throws Exception {
-        if (log.isDebugEnabled()) {
-            log.debug("X509Token writeTo()");
-        }
         Util.writeByteBuffer(this.encryptedToken, out);
     }
 
     public void readFrom(DataInput in) throws Exception {
-        if (log.isDebugEnabled()) {
-            log.debug("X509Token readFrom()");
-        }
         this.encryptedToken = Util.readByteBuffer(in);
         this.valueSet = true;
     }
@@ -174,36 +144,23 @@ public class X509Token extends AuthToken {
                     CertificateException, NoSuchPaddingException, InvalidKeyException,
                     IllegalBlockSizeException, BadPaddingException, UnrecoverableEntryException {
         KeyStore store = KeyStore.getInstance(this.keystore_type);
-        InputStream inputStream=null;
-        inputStream=Thread.currentThread()
-                          .getContextClassLoader()
-                          .getResourceAsStream(this.keystore_path);
+        InputStream inputStream=Thread.currentThread().getContextClassLoader().getResourceAsStream(this.keystore_path);
         if(inputStream == null)
-          inputStream=new FileInputStream(this.keystore_path);
+            inputStream=new FileInputStream(this.keystore_path);
         store.load(inputStream, this.keystore_password);
 
         this.cipher = Cipher.getInstance(this.cipher_type);
         this.certificate = (X509Certificate) store.getCertificate(this.cert_alias);
 
-        if (log.isDebugEnabled()) {
-            log.debug("certificate = " + this.certificate.toString());
-        }
+        log.debug("certificate = " + this.certificate.toString());
 
         this.cipher.init(Cipher.ENCRYPT_MODE, this.certificate);
         this.encryptedToken = this.cipher.doFinal(this.auth_value.getBytes());
-
-        if (log.isDebugEnabled()) {
-            log.debug("encryptedToken = " + this.encryptedToken);
-        }
 
         KeyStore.PrivateKeyEntry privateKey = (KeyStore.PrivateKeyEntry) store.getEntry(
                         this.cert_alias, new KeyStore.PasswordProtection(this.cert_password));
         this.certPrivateKey = privateKey.getPrivateKey();
 
         this.valueSet=true;
-
-        if (log.isDebugEnabled()) {
-            log.debug("certPrivateKey = " + this.certPrivateKey.toString());
-        }
     }
 }

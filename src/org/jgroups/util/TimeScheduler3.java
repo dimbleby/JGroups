@@ -8,6 +8,8 @@ import org.jgroups.logging.LogFactory;
 
 import java.util.List;
 import java.util.concurrent.*;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 
 /**
@@ -17,19 +19,22 @@ import java.util.concurrent.*;
  */
 public class TimeScheduler3 implements TimeScheduler, Runnable {
     /** Thread pool used to execute the tasks */
-    protected final ThreadPoolExecutor                pool;
+    protected Executor                    pool;
 
     /** DelayQueue with tasks being sorted according to execution times (next execution first) */
-    protected final BlockingQueue<Task>               queue=new DelayQueue<>();
+    protected final BlockingQueue<Task>   queue=new DelayQueue<>();
 
     /** Thread which removes tasks ready to be executed from the queue and submits them to the pool for execution */
-    protected volatile Thread                         runner;
+    protected volatile Thread             runner;
 
-    protected static final Log                        log=LogFactory.getLog(TimeScheduler3.class);
+    protected static final Log            log=LogFactory.getLog(TimeScheduler3.class);
 
-    protected ThreadFactory                           timer_thread_factory;
+    protected ThreadFactory               timer_thread_factory;
 
-    protected enum TaskType                           {dynamic, fixed_rate, fixed_delay}
+    // if true, non-blocking timer tasks are run directly by the runner thread and not submitted to the thread pool
+    protected boolean                     non_blocking_task_handling=true;
+
+    protected enum TaskType               {dynamic, fixed_rate, fixed_delay}
 
 
     /**
@@ -37,7 +42,7 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
      */
     public TimeScheduler3() {
         pool=new ThreadPoolExecutor(4, 10,
-                                    5000, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(5000),
+                                    30000, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(100),
                                     Executors.defaultThreadFactory(), new ThreadPoolExecutor.CallerRunsPolicy());
         start();
     }
@@ -45,27 +50,40 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
 
     public TimeScheduler3(ThreadFactory factory, int min_threads, int max_threads, long keep_alive_time, int max_queue_size,
                           String rejection_policy) {
+        this(factory, min_threads, max_threads, keep_alive_time, new ArrayBlockingQueue<>(max_queue_size), rejection_policy, true);
+    }
+
+    public TimeScheduler3(ThreadFactory factory, int min_threads, int max_threads, long keep_alive_time,
+                          BlockingQueue<Runnable> queue, String rejection_policy, boolean thread_pool_enabled) {
         timer_thread_factory=factory;
-        pool=new ThreadPoolExecutor(min_threads, max_threads,keep_alive_time, TimeUnit.MILLISECONDS,
-                                    new LinkedBlockingQueue<>(max_queue_size),
-                                    factory, Util.parseRejectionPolicy(rejection_policy));
+        pool=thread_pool_enabled?
+          new ThreadPoolExecutor(min_threads, max_threads,keep_alive_time, TimeUnit.MILLISECONDS,
+                                 queue, factory, Util.parseRejectionPolicy(rejection_policy))
+          : new DirectExecutor();
         start();
     }
 
+    public TimeScheduler3(Executor thread_pool, ThreadFactory factory) {
+        timer_thread_factory=factory;
+        pool=thread_pool;
+        start();
+    }
 
-
-    public void    setThreadFactory(ThreadFactory f) {pool.setThreadFactory(f);}
-    public int     getMinThreads()                   {return pool.getCorePoolSize();}
-    public void    setMinThreads(int size)           {pool.setCorePoolSize(size);}
-    public int     getMaxThreads()                   {return pool.getMaximumPoolSize();}
-    public void    setMaxThreads(int size)           {pool.setMaximumPoolSize(size);}
-    public long    getKeepAliveTime()                {return pool.getKeepAliveTime(TimeUnit.MILLISECONDS);}
-    public void    setKeepAliveTime(long time)       {pool.setKeepAliveTime(time, TimeUnit.MILLISECONDS);}
-    public int     getCurrentThreads()               {return pool.getPoolSize();}
-    public int     getQueueSize()                    {return pool.getQueue().size();}
-    public int     size()                            {return queue.size();}
-    public String  toString()                        {return getClass().getSimpleName();}
-    public boolean isShutdown()                      {return pool.isShutdown();}
+    public void    setThreadFactory(ThreadFactory f)     {condSet((p) -> p.setThreadFactory(f));}
+    public void    setThreadPool(Executor new_pool)      {pool=new_pool;}
+    public int     getMinThreads()                       {return condGet(ThreadPoolExecutor::getCorePoolSize, 0);}
+    public void    setMinThreads(int size)               {condSet(p -> p.setCorePoolSize(size));}
+    public int     getMaxThreads()                       {return condGet(ThreadPoolExecutor::getMaximumPoolSize, 0);}
+    public void    setMaxThreads(int size)               {condSet(p -> p.setMaximumPoolSize(size));}
+    public long    getKeepAliveTime()                    {return condGet(p -> p.getKeepAliveTime(TimeUnit.MILLISECONDS), 0L);}
+    public void    setKeepAliveTime(long time)           {condSet(p -> p.setKeepAliveTime(time, TimeUnit.MILLISECONDS));}
+    public int     getCurrentThreads()                   {return condGet(ThreadPoolExecutor::getPoolSize, 0);}
+    public int     getQueueSize()                        {return condGet(p -> p.getQueue().size(), 0);}
+    public int     size()                                {return queue.size();}
+    public String  toString()                            {return getClass().getSimpleName();}
+    public boolean isShutdown()                          {return condGet(ThreadPoolExecutor::isShutdown, false);}
+    public boolean getNonBlockingTaskHandling()          {return non_blocking_task_handling;}
+    public void    setNonBlockingTaskHandling(boolean b) {this.non_blocking_task_handling=b;}
 
 
     public String dumpTimerTasks() {
@@ -81,26 +99,26 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
 
 
 
-    public void execute(Runnable task) {
+    public void execute(Runnable task, boolean can_block) {
         submitToPool(task instanceof TimeScheduler.Task?
-                       new RecurringTask(task, TaskType.dynamic, 0, ((TimeScheduler.Task)task).nextInterval(), TimeUnit.MILLISECONDS)
-                       : new Task(task)); // we'll execute the task directly
+                       new RecurringTask(task, TaskType.dynamic, 0, ((TimeScheduler.Task)task).nextInterval(), TimeUnit.MILLISECONDS, can_block)
+                       : new Task(task, can_block)); // we'll execute the task directly
     }
 
 
-    public Future<?> schedule(Runnable work, long initial_delay, TimeUnit unit) {
-        return doSchedule(new Task(work, initial_delay, unit), initial_delay);
+    public Future<?> schedule(Runnable work, long initial_delay, TimeUnit unit, boolean can_block) {
+        return doSchedule(new Task(work, initial_delay, unit, can_block), initial_delay);
     }
 
 
 
-    public Future<?> scheduleWithFixedDelay(Runnable work, long initial_delay, long delay, TimeUnit unit) {
-        return scheduleRecurring(work, TaskType.fixed_delay, initial_delay, delay, unit);
+    public Future<?> scheduleWithFixedDelay(Runnable work, long initial_delay, long delay, TimeUnit unit, boolean can_block) {
+        return scheduleRecurring(work, TaskType.fixed_delay, initial_delay, delay, unit, can_block);
     }
 
 
-    public Future<?> scheduleAtFixedRate(Runnable work, long initial_delay, long delay, TimeUnit unit) {
-        return scheduleRecurring(work,TaskType.fixed_rate,initial_delay,delay,unit);
+    public Future<?> scheduleAtFixedRate(Runnable work, long initial_delay, long delay, TimeUnit unit, boolean can_block) {
+        return scheduleRecurring(work,TaskType.fixed_rate,initial_delay,delay,unit, can_block);
     }
 
 
@@ -112,8 +130,8 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
      * {@link #scheduleWithFixedDelay(Runnable,long,long,java.util.concurrent.TimeUnit)}.
      * @param work the task to execute
      */
-    public Future<?> scheduleWithDynamicInterval(TimeScheduler.Task work) {
-        return scheduleRecurring(work, TaskType.dynamic, work.nextInterval(), 0, TimeUnit.MILLISECONDS);
+    public Future<?> scheduleWithDynamicInterval(TimeScheduler.Task work, boolean can_block) {
+        return scheduleRecurring(work, TaskType.dynamic, work.nextInterval(), 0, TimeUnit.MILLISECONDS, can_block);
     }
 
 
@@ -137,13 +155,16 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
             }
         queue.clear();
 
-        List<Runnable> remaining_tasks=pool.shutdownNow();
-        remaining_tasks.stream().filter(task -> task instanceof Future).forEach(task -> ((Future)task).cancel(true));
-        pool.getQueue().clear();
-        try {
-            pool.awaitTermination(Global.THREADPOOL_SHUTDOWN_WAIT_TIME, TimeUnit.MILLISECONDS);
-        }
-        catch(InterruptedException e) {
+        if(pool instanceof ThreadPoolExecutor) {
+            ThreadPoolExecutor p=(ThreadPoolExecutor)pool;
+            List<Runnable> remaining_tasks=p.shutdownNow();
+            remaining_tasks.stream().filter(task -> task instanceof Future).forEach(task -> ((Future)task).cancel(true));
+            p.getQueue().clear();
+            try {
+                p.awaitTermination(Global.THREADPOOL_SHUTDOWN_WAIT_TIME, TimeUnit.MILLISECONDS);
+            }
+            catch(InterruptedException e) {
+            }
         }
 
         // clears the threads list (https://issues.jboss.org/browse/JGRP-1971)
@@ -157,8 +178,8 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
     public void run() {
         while(Thread.currentThread() == runner) {
             try {
-                final Task entry=queue.take();
-                submitToPool(entry);
+                Task task=queue.take();
+                submitToPool(task);
             }
             catch(InterruptedException interrupted) {
                 // flag is cleared and we check if the loop should be terminated at the top of the loop
@@ -170,8 +191,8 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
     }
 
 
-    protected Future<?> scheduleRecurring(Runnable work, TaskType type, long initial_delay, long delay, TimeUnit unit) {
-        return doSchedule(new RecurringTask(work, type, initial_delay, delay, unit), initial_delay);
+    protected Future<?> scheduleRecurring(Runnable work, TaskType type, long initial_delay, long delay, TimeUnit unit, boolean can_block) {
+        return doSchedule(new RecurringTask(work, type, initial_delay, delay, unit, can_block), initial_delay);
     }
 
 
@@ -188,17 +209,31 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
         return add(task);
     }
 
+    protected void condSet(Consumer<ThreadPoolExecutor> setter) {
+        if(pool instanceof ThreadPoolExecutor)
+            setter.accept((ThreadPoolExecutor)pool);
+    }
+
+    protected <T> T condGet(Function<ThreadPoolExecutor,T> getter, T default_value) {
+        if(pool instanceof ThreadPoolExecutor)
+            return getter.apply((ThreadPoolExecutor)pool);
+        return default_value;
+    }
 
 
+    protected void submitToPool(Task task) {
+        if(non_blocking_task_handling && !task.canBlock()) {
+            task.run();
+            return;
+        }
 
-    protected void submitToPool(final Task entry) {
         try {
-            pool.execute(entry);
+            pool.execute(task);
         }
         catch(RejectedExecutionException rejected) { // only thrown if rejection policy is "abort"
             Thread thread=timer_thread_factory != null?
-              timer_thread_factory.newThread(entry, "Timer temp thread")
-              : new Thread(entry, "Timer temp thread");
+              timer_thread_factory.newThread(task, "Timer temp thread")
+              : new Thread(task, "Timer temp thread");
             thread.start();
         }
     }
@@ -238,12 +273,15 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
         protected long             delay;         // time (in ns) after which the task should execute
         protected volatile boolean cancelled;
         protected volatile boolean done;
+        protected final boolean    can_block;
 
-        public Task(Runnable runnable) {
+        public Task(Runnable runnable, boolean can_block) {
             this.runnable=runnable;
+            this.can_block=can_block;
         }
 
-        public Task(Runnable runnable, long initial_delay, TimeUnit unit) {
+        public Task(Runnable runnable, long initial_delay, TimeUnit unit, boolean can_block) {
+            this.can_block=can_block;
             this.creation_time=System.nanoTime();
             this.delay=TimeUnit.NANOSECONDS.convert(initial_delay, unit);
             this.runnable=runnable;
@@ -252,6 +290,7 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
         }
 
         public Runnable getRunnable() {return runnable;}
+        public boolean  canBlock()    {return can_block;}
 
         public int compareTo(Delayed o) {
             long my_delay=getDelay(TimeUnit.NANOSECONDS), other_delay=o.getDelay(TimeUnit.NANOSECONDS);
@@ -293,7 +332,7 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
         }
 
         public String toString() {
-            return runnable.toString();
+            return String.format("%s (can block=%b)", runnable.toString(), can_block);
         }
     }
 
@@ -304,8 +343,8 @@ public class TimeScheduler3 implements TimeScheduler, Runnable {
         protected final long     initial_delay; // ns
         protected int            cnt=1; // number of invocations (for fixed rate invocations)
 
-        public RecurringTask(Runnable runnable, TaskType type, long initial_delay, long delay, TimeUnit unit) {
-            super(runnable, initial_delay, unit);
+        public RecurringTask(Runnable runnable, TaskType type, long initial_delay, long delay, TimeUnit unit, boolean can_block) {
+            super(runnable, initial_delay, unit, can_block);
             this.initial_delay=TimeUnit.NANOSECONDS.convert(initial_delay, TimeUnit.MILLISECONDS);
             this.type=type;
             period=TimeUnit.NANOSECONDS.convert(delay, unit);

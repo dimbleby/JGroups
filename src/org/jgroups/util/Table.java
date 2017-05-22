@@ -4,10 +4,12 @@ import org.jgroups.annotations.GuardedBy;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiConsumer;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
@@ -60,7 +62,7 @@ public class Table<T> implements Iterable<T> {
 
     protected final Lock           lock=new ReentrantLock();
 
-    protected final AtomicBoolean  processing=new AtomicBoolean(false);
+    protected final AtomicInteger  adders=new AtomicInteger(0);
 
     protected int                  num_compactions=0, num_resizes=0, num_moves=0, num_purges=0;
     
@@ -121,8 +123,7 @@ public class Table<T> implements Iterable<T> {
             throw new IllegalArgumentException("resize_factor needs to be > 1");
     }
 
-
-    public AtomicBoolean getProcessing() {return processing;}
+    public AtomicInteger getAdders()     {return adders;}
 
     public long getOffset()              {return offset;}
     public int  getElementsPerRow()      {return elements_per_row;}
@@ -135,7 +136,7 @@ public class Table<T> implements Iterable<T> {
     public int getNumResizes()           {return num_resizes;}
     public int getNumPurges()            {return num_purges;}
 
-    /** Returns the numbers of elements in the table */
+    /** Returns an appromximation of the number of elements in the table */
     public int size()                    {return size;}
     public boolean isEmpty()             {return size <= 0;}
     public long getLow()                 {return low;}
@@ -157,6 +158,19 @@ public class Table<T> implements Iterable<T> {
             forEach(hd+1, hr, visitor);
             long retval=visitor.getResult();
             return retval == -1? hd : retval;
+        }
+        finally {
+            lock.unlock();
+        }
+    }
+
+    /** Returns the number of messages that can be delivered */
+    public int getNumDeliverable() {
+        NumDeliverable visitor=new NumDeliverable();
+        lock.lock();
+        try {
+            forEach(hd+1, hr, visitor);
+            return visitor.getResult();
         }
         finally {
             lock.unlock();
@@ -218,7 +232,7 @@ public class Table<T> implements Iterable<T> {
      * @param list
      * @return True if at least 1 element was added successfully
      */
-    public boolean add(final List<Tuple<Long,T>> list) {
+    public boolean add(final List<LongTuple<T>> list) {
        return add(list, false);
     }
 
@@ -228,7 +242,7 @@ public class Table<T> implements Iterable<T> {
      * @param list
      * @return True if at least 1 element was added successfully. This guarantees that the list has at least 1 element
      */
-    public boolean add(final List<Tuple<Long,T>> list, boolean remove_added_elements) {
+    public boolean add(final List<LongTuple<T>> list, boolean remove_added_elements) {
         return add(list, remove_added_elements, null);
     }
 
@@ -241,19 +255,19 @@ public class Table<T> implements Iterable<T> {
      * @param const_value If non-null, this value should be used rather than the values of the list tuples
      * @return True if at least 1 element was added successfully, false otherwise.
      */
-    public boolean add(final List<Tuple<Long,T>> list, boolean remove_added_elements, T const_value) {
+    public boolean add(final List<LongTuple<T>> list, boolean remove_added_elements, T const_value) {
         if(list == null || list.isEmpty())
             return false;
         boolean added=false;
+        // find the highest seqno (unfortunately, the list is not ordered by seqno)
+        long highest_seqno=findHighestSeqno(list);
         lock.lock();
         try {
-            // find the highest seqno (unfortunately, the list is not ordered by seqno)
-            long highest_seqno=findHighestSeqno(list);
             if(highest_seqno != -1 && computeRow(highest_seqno) >= matrix.length)
                 resize(highest_seqno);
 
-            for(Iterator<Tuple<Long,T>> it=list.iterator(); it.hasNext();) {
-                Tuple<Long,T> tuple=it.next();
+            for(Iterator<LongTuple<T>> it=list.iterator(); it.hasNext();) {
+                LongTuple<T> tuple=it.next();
                 long seqno=tuple.getVal1();
                 T element=const_value != null? const_value : tuple.getVal2();
                 if(_add(seqno, element, false, null))
@@ -353,36 +367,37 @@ public class Table<T> implements Iterable<T> {
 
 
     public List<T> removeMany(boolean nullify, int max_results) {
-        return removeMany(null, nullify, max_results);
+        return removeMany(nullify, max_results, null);
     }
 
-    public List<T> removeMany(final AtomicBoolean processing, boolean nullify, int max_results) {
-        return removeMany(processing, nullify, max_results, null);
+    public List<T> removeMany(boolean nullify, int max_results, Predicate<T> filter) {
+        return removeMany(nullify, max_results, filter, LinkedList::new, LinkedList::add);
     }
 
 
     /**
-     * Removes between 0 and max_results elements from the table and returns them in a list. If filter is non-null,
-     * only elements which the filter accepts are returned. Note that elements are always removed from the table,
-     * but may or may not get added to the returned list.
-     * @return A list of element. A null list means no more elements are in the table and processing (if set)
-     * will be set to false
+     * Removes elements from the table and adds them to the result created by result_creator. Between 0 and max_results
+     * elements are removed. If no elements were removed, processing will be set to true while the table lock is held.
+     * @param nullify if true, the x,y location of the removed element in the matrix will be nulled
+     * @param max_results the max number of results to be returned, even if more elements would be removable
+     * @param filter a filter which accepts (or rejects) elements into the result. If null, all elements will be accepted
+     * @param result_creator a supplier required to create the result, e.g. ArrayList::new
+     * @param accumulator an accumulator accepting the result and an element, e.g. ArrayList::add
+     * @param <R> the type of the result
+     * @return the result
      */
-    public List<T> removeMany(final AtomicBoolean processing, boolean nullify, int max_results, Predicate<T> filter) {
+    public <R> R removeMany(boolean nullify, int max_results, Predicate<T> filter,
+                            Supplier<R> result_creator, BiConsumer<R,T> accumulator) {
         lock.lock();
         try {
-            Remover remover=new Remover(nullify, max_results, filter);
+            Remover<R> remover=new Remover<>(nullify, max_results, filter, result_creator, accumulator);
             forEach(hd+1, hr, remover);
-            List<T> retval=remover.getList();
-            if(processing != null && (retval == null || retval.isEmpty()))
-                processing.set(false);
-            return retval;
+            return remover.getResult();
         }
         finally {
             lock.unlock();
         }
     }
-
 
     /**
      * Removes all elements less than or equal to seqno from the table. Does this by nulling entire rows in the matrix
@@ -544,11 +559,11 @@ public class Table<T> implements Iterable<T> {
     }
 
     // list must not be null or empty
-    protected long findHighestSeqno(List<Tuple<Long,T>> list) {
+    protected long findHighestSeqno(List<LongTuple<T>> list) {
         long seqno=-1;
-        for(Tuple<Long,T> tuple: list) {
-            Long val=tuple.getVal1();
-            if(val != null && val - seqno > 0)
+        for(LongTuple<T> tuple: list) {
+            long val=tuple.getVal1();
+            if(val - seqno > 0)
                 seqno=val;
         }
         return seqno;
@@ -623,7 +638,7 @@ public class Table<T> implements Iterable<T> {
     /** Iterate from low to hr and add up non-null values. Caller must hold the lock. */
     @GuardedBy("lock")
     public int computeSize() {
-        return (int)stream().filter(el -> el != null).count();
+        return (int)stream().filter(Objects::nonNull).count();
     }
 
 
@@ -694,7 +709,7 @@ public class Table<T> implements Iterable<T> {
     public String dump() {
         lock.lock();
         try {
-            return stream(low, hr).filter(el -> el != null).map(Object::toString)
+            return stream(low, hr).filter(Objects::nonNull).map(Object::toString)
               .collect(Collectors.joining(", "));
         }
         finally {
@@ -792,32 +807,32 @@ public class Table<T> implements Iterable<T> {
 
 
 
-    protected class Remover implements Visitor<T> {
+    protected class Remover<R> implements Visitor<T> {
         protected final boolean      nullify;
         protected final int          max_results;
-        protected List<T>            list;
         protected int                num_results;
         protected final Predicate<T> filter;
+        protected R                  result;
+        protected Supplier<R>        result_creator;
+        protected BiConsumer<R,T>    result_accumulator;
 
-        public Remover(boolean nullify, int max_results) {
-            this(nullify, max_results, null);
-        }
-
-        public Remover(boolean nullify, int max_results, Predicate<T> filter) {
+        public Remover(boolean nullify, int max_results, Predicate<T> filter, Supplier<R> creator, BiConsumer<R,T> accumulator) {
             this.nullify=nullify;
             this.max_results=max_results;
             this.filter=filter;
+            this.result_creator=creator;
+            this.result_accumulator=accumulator;
         }
 
-        public List<T> getList() {return list;}
+        public R getResult() {return result;}
 
         @GuardedBy("lock")
         public boolean visit(long seqno, T element, int row, int column) {
             if(element != null) {
                 if(filter == null || filter.test(element)) {
-                    if(list == null)
-                        list=new LinkedList<>();
-                    list.add(element);
+                    if(result == null)
+                        result=result_creator.get();
+                    result_accumulator.accept(result, element);
                     num_results++;
                 }
                 if(seqno - hd > 0)
@@ -871,6 +886,19 @@ public class Table<T> implements Iterable<T> {
             if(element == null)
                 return false;
             highest_deliverable=seqno;
+            return true;
+        }
+    }
+
+    protected class NumDeliverable implements Visitor<T> {
+        protected int num_deliverable=0;
+
+        public int getResult() {return num_deliverable;}
+
+        public boolean visit(long seqno, T element, int row, int column) {
+            if(element == null)
+                return false;
+            num_deliverable++;
             return true;
         }
     }

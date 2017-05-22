@@ -2,10 +2,11 @@ package org.jgroups.protocols.tom;
 
 import org.jgroups.Address;
 import org.jgroups.util.Bits;
-import org.jgroups.util.Streamable;
+import org.jgroups.util.SizeStreamable;
 import org.jgroups.util.Util;
 
-import java.io.*;
+import java.io.DataInput;
+import java.io.DataOutput;
 
 
 /**
@@ -16,8 +17,7 @@ import java.io.*;
  * @author Pedro Ruivo
  * @since 3.1
  */
-public class MessageID implements Externalizable, Comparable<MessageID>, Cloneable, Streamable {
-    private static final long serialVersionUID = 878801547232534461L;
+public class MessageID implements Comparable<MessageID>, Cloneable, SizeStreamable {
     private Address address = null;
     private long id = -1;
 
@@ -93,21 +93,4 @@ public class MessageID implements Externalizable, Comparable<MessageID>, Cloneab
         id = Bits.readLong(in);
     }
 
-    @Override
-    public void writeExternal(ObjectOutput objectOutput) throws IOException {
-        try {
-            writeTo(objectOutput);
-        } catch (Exception e) {
-            throw new IOException(e);
-        }
-    }
-
-    @Override
-    public void readExternal(ObjectInput objectInput) throws IOException, ClassNotFoundException {
-        try {
-            readFrom(objectInput);
-        } catch (Exception e) {
-            throw new IOException(e);
-        }
-    }
 }

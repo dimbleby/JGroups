@@ -65,7 +65,7 @@ public class RemoteGetStressTest {
             dispatchers[i]=new RpcDispatcher(channels[i], this);
             channels[i].connect("cluster");
         }
-        Util.waitUntilAllChannelsHaveSameSize(10000, 500, channels);
+        Util.waitUntilAllChannelsHaveSameView(10000, 500, channels);
         System.out.println("view A: " + channels[0].getView());
 
         target_members=Arrays.asList(channels[1].getAddress(), channels[2].getAddress(), channels[3].getAddress());
@@ -99,9 +99,8 @@ public class RemoteGetStressTest {
 
     protected static JChannel createChannel(String name) throws Exception {
         Protocol[] protocols={
-          new SHARED_LOOPBACK().setValue("oob_thread_pool_min_threads", 1)
-            .setValue("oob_thread_pool_max_threads", 5)
-          .setValue("oob_thread_pool_queue_enabled", false),
+          new SHARED_LOOPBACK().setValue("thread_pool_min_threads", 1)
+            .setValue("thread_pool_max_threads", 5),
           new SHARED_LOOPBACK_PING(),
           new NAKACK2(),
           new UNICAST3(),
@@ -132,7 +131,7 @@ public class RemoteGetStressTest {
         TP transport=ch.getProtocolStack().getTransport();
         DISCARD discard=new DISCARD();
         discard.setUpDiscardRate(discard_rate);
-        ch.getProtocolStack().insertProtocol(discard, ProtocolStack.ABOVE, transport.getClass());
+        ch.getProtocolStack().insertProtocol(discard, ProtocolStack.Position.ABOVE, transport.getClass());
     }
 
     protected class Invoker extends Thread {

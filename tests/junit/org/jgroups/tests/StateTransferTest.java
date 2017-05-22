@@ -99,7 +99,7 @@ public class StateTransferTest extends ChannelTestBase {
         for(int i=0; i < apps.length; i++)
             tmp[i]=apps[i].getChannel();
 
-        Util.waitUntilAllChannelsHaveSameSize(20000, 1000, tmp);
+        Util.waitUntilAllChannelsHaveSameView(20000, 1000, tmp);
 
         for(Thread thread: threads)
             thread.join(20000);
@@ -218,7 +218,7 @@ public class StateTransferTest extends ChannelTestBase {
         else { // no state transfer protocol found in stack
             Protocol flush=stack.findProtocol(FLUSH.class);
             if(flush != null)
-                stack.insertProtocol(new_state_transfer_protcol, ProtocolStack.BELOW, FLUSH.class);
+                stack.insertProtocol(new_state_transfer_protcol, ProtocolStack.Position.BELOW, FLUSH.class);
             else
                 stack.insertProtocolAtTop(new_state_transfer_protcol);
         }

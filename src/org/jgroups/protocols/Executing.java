@@ -20,6 +20,9 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
+
+import static org.jgroups.protocols.Executing.Type.RUN_REQUEST;
 
 /**
  * This is the base protocol used for executions.
@@ -171,7 +174,7 @@ abstract public class Executing extends Protocol {
     public Object down(Event evt) {
         switch(evt.getType()) {
             case ExecutorEvent.TASK_SUBMIT:
-                Runnable runnable = (Runnable)evt.getArg();
+                Runnable runnable =evt.getArg();
                 // We are limited to a number of concurrent request id's
                 // equal to 2^63-1.  This is quite large and if it 
                 // overflows it will still be positive
@@ -191,7 +194,7 @@ abstract public class Executing extends Protocol {
 
                 _awaitingConsumer.add(runnable);
 
-                sendToCoordinator(Type.RUN_REQUEST, requestId, local_addr);
+                sendToCoordinator(RUN_REQUEST, requestId, local_addr);
                 break;
             case ExecutorEvent.CONSUMER_READY:
                 Thread currentThread = Thread.currentThread();
@@ -345,7 +348,7 @@ abstract public class Executing extends Protocol {
                 }
                 break;
             case ExecutorEvent.TASK_CANCEL:
-                Object[] array = (Object[])evt.getArg();
+                Object[] array =evt.getArg();
                 runnable = (Runnable)array[0];
                 
                 if (_awaitingConsumer.remove(runnable)) {
@@ -389,7 +392,7 @@ abstract public class Executing extends Protocol {
                     return Boolean.FALSE;
                 }
             case ExecutorEvent.ALL_TASK_CANCEL:
-                array = (Object[])evt.getArg();
+                array =evt.getArg();
                 
                 // This is a RunnableFuture<?> so this cast is okay
                 @SuppressWarnings("unchecked")
@@ -426,11 +429,11 @@ abstract public class Executing extends Protocol {
                 }
                 return notRan;
             case Event.SET_LOCAL_ADDRESS:
-                local_addr=(Address)evt.getArg();
+                local_addr=evt.getArg();
                 break;
 
             case Event.VIEW_CHANGE:
-                handleView((View)evt.getArg());
+                handleView(evt.getArg());
                 break;
         }
         return down_prot.down(evt);
@@ -454,91 +457,91 @@ abstract public class Executing extends Protocol {
 
     public Object up(Event evt) {
         switch(evt.getType()) {
-            case Event.MSG:
-                Message msg=(Message)evt.getArg();
-                ExecutorHeader hdr=(ExecutorHeader)msg.getHeader(id);
-                if(hdr == null)
-                    break;
-
-                Request req=(Request)msg.getObject();
-                if(log.isTraceEnabled())
-                    log.trace("[" + local_addr + "] <-- [" + msg.getSrc() + "] " + req);
-                switch(req.type) {
-                    case RUN_REQUEST:
-                        handleTaskRequest(req.request, (Address)req.object);
-                        break;
-                    case CONSUMER_READY:
-                        handleConsumerReadyRequest(req.request, (Address)req.object);
-                        break;
-                    case CONSUMER_UNREADY:
-                        handleConsumerUnreadyRequest(req.request, (Address)req.object);
-                        break;
-                    case CONSUMER_FOUND:
-                        handleConsumerFoundResponse(req.request, (Address)req.object);
-                        break;
-                    case RUN_SUBMITTED:
-                        RequestWithThread reqWT = (RequestWithThread)req;
-                        Object objectToRun = reqWT.object;
-                        Runnable runnable;
-                        if (objectToRun instanceof Runnable) {
-                            runnable = (Runnable)objectToRun;
-                        }
-                        else if (objectToRun instanceof Callable) {
-                            @SuppressWarnings("unchecked")
-                            Callable<Object> callable = (Callable<Object>)objectToRun;
-                            runnable = new FutureTask<>(callable);
-                        }
-                        else {
-                            log.error(Util.getMessage("RequestOfType") + req.type + 
-                                " sent an object of " + objectToRun + " which is invalid");
-                            break;
-                        }
-                        
-                        handleTaskSubmittedRequest(runnable, msg.getSrc(), 
-                            req.request, reqWT.threadId);
-                        break;
-                    case RUN_REJECTED:
-                        // We could make requests local for this, but is it really worth it
-                        handleTaskRejectedResponse(msg.getSrc(), req.request);
-                        break;
-                    case RESULT_SUCCESS:
-                        handleValueResponse(msg.getSrc(), req.request, req.object);
-                        break;
-                    case RESULT_EXCEPTION:
-                        handleExceptionResponse(msg.getSrc(), req.request, 
-                            (Throwable)req.object);
-                        break;
-                    case INTERRUPT_RUN:
-                        // We could make requests local for this, but is it really worth it
-                        handleInterruptRequest(msg.getSrc(), req.request);
-                        break;
-                    case CREATE_CONSUMER_READY:
-                        Owner owner = new Owner((Address)req.object, req.request);
-                        handleNewConsumer(owner);
-                        break;
-                    case CREATE_RUN_REQUEST:
-                        owner = new Owner((Address)req.object, req.request);
-                        handleNewRunRequest(owner);
-                        break;
-                    case DELETE_CONSUMER_READY:
-                        owner = new Owner((Address)req.object, req.request);
-                        handleRemoveConsumer(owner);
-                        break;
-                    case DELETE_RUN_REQUEST:
-                        owner = new Owner((Address)req.object, req.request);
-                        handleRemoveRunRequest(owner);
-                        break;
-                    default:
-                        log.error(Util.getMessage("RequestOfType") + req.type + " not known");
-                        break;
-                }
-                return null;
-
             case Event.VIEW_CHANGE:
-                handleView((View)evt.getArg());
+                handleView(evt.getArg());
                 break;
         }
         return up_prot.up(evt);
+    }
+
+    public Object up(Message msg) {
+        ExecutorHeader hdr=msg.getHeader(id);
+        if(hdr == null)
+            return up_prot.up(msg);
+
+        Request req=msg.getObject();
+        if(log.isTraceEnabled())
+            log.trace("[" + local_addr + "] <-- [" + msg.getSrc() + "] " + req);
+        switch(req.type) {
+            case RUN_REQUEST:
+                handleTaskRequest(req.request, (Address)req.object);
+                break;
+            case CONSUMER_READY:
+                handleConsumerReadyRequest(req.request, (Address)req.object);
+                break;
+            case CONSUMER_UNREADY:
+                handleConsumerUnreadyRequest(req.request, (Address)req.object);
+                break;
+            case CONSUMER_FOUND:
+                handleConsumerFoundResponse(req.request, (Address)req.object);
+                break;
+            case RUN_SUBMITTED:
+                RequestWithThread reqWT = (RequestWithThread)req;
+                Object objectToRun = reqWT.object;
+                Runnable runnable;
+                if (objectToRun instanceof Runnable) {
+                    runnable = (Runnable)objectToRun;
+                }
+                else if (objectToRun instanceof Callable) {
+                    @SuppressWarnings("unchecked")
+                    Callable<Object> callable = (Callable<Object>)objectToRun;
+                    runnable = new FutureTask<>(callable);
+                }
+                else {
+                    log.error(Util.getMessage("RequestOfType") + req.type +
+                                " sent an object of " + objectToRun + " which is invalid");
+                    break;
+                }
+                        
+                handleTaskSubmittedRequest(runnable, msg.getSrc(),
+                                           req.request, reqWT.threadId);
+                break;
+            case RUN_REJECTED:
+                // We could make requests local for this, but is it really worth it
+                handleTaskRejectedResponse(msg.getSrc(), req.request);
+                break;
+            case RESULT_SUCCESS:
+                handleValueResponse(msg.getSrc(), req.request, req.object);
+                break;
+            case RESULT_EXCEPTION:
+                handleExceptionResponse(msg.getSrc(), req.request,
+                                        (Throwable)req.object);
+                break;
+            case INTERRUPT_RUN:
+                // We could make requests local for this, but is it really worth it
+                handleInterruptRequest(msg.getSrc(), req.request);
+                break;
+            case CREATE_CONSUMER_READY:
+                Owner owner = new Owner((Address)req.object, req.request);
+                handleNewConsumer(owner);
+                break;
+            case CREATE_RUN_REQUEST:
+                owner = new Owner((Address)req.object, req.request);
+                handleNewRunRequest(owner);
+                break;
+            case DELETE_CONSUMER_READY:
+                owner = new Owner((Address)req.object, req.request);
+                handleRemoveConsumer(owner);
+                break;
+            case DELETE_RUN_REQUEST:
+                owner = new Owner((Address)req.object, req.request);
+                handleRemoveRunRequest(owner);
+                break;
+            default:
+                log.error(Util.getMessage("RequestOfType") + req.type + " not known");
+                break;
+        }
+        return null;
     }
 
     protected void handleView(View view) {
@@ -581,8 +584,8 @@ abstract public class Executing extends Protocol {
                         // in case if our task gets picked up since another was removed
                         _requestId.put(runnable, owner.getRequestId());
                         _awaitingConsumer.add(runnable);
-                        sendToCoordinator(Type.RUN_REQUEST, owner.getRequestId(), 
-                                local_addr);
+                        sendToCoordinator(RUN_REQUEST, owner.getRequestId(),
+                                          local_addr);
                     }
                 }
             }
@@ -778,7 +781,7 @@ abstract public class Executing extends Protocol {
             if (taskRequestId != requestId) {
                 log.warn("Task Request Id doesn't match in rejection");
             }
-            sendToCoordinator(Type.RUN_REQUEST, taskRequestId, local_addr);
+            sendToCoordinator(RUN_REQUEST, taskRequestId, local_addr);
         }
         else {
             log.error(Util.getMessage("ErrorResubmittingTaskForRequestId") + requestId);
@@ -894,7 +897,7 @@ abstract public class Executing extends Protocol {
         if(log.isTraceEnabled())
             log.trace("[" + local_addr + "] --> [" + (dest == null? "ALL" : dest) + "] " + req);
         try {
-            down_prot.down(new Event(Event.MSG, msg));
+            down_prot.down(msg);
         }
         catch(Exception ex) {
             log.error(Util.getMessage("FailedSending") + type + " request: " + ex);
@@ -910,7 +913,7 @@ abstract public class Executing extends Protocol {
         if(log.isTraceEnabled())
             log.trace("[" + local_addr + "] --> [" + (dest == null? "ALL" : dest) + "] " + req);
         try {
-            down_prot.down(new Event(Event.MSG, msg));
+            down_prot.down(msg);
         }
         catch(Exception ex) {
             log.error(Util.getMessage("FailedSending") + type + " request: " + ex);
@@ -930,7 +933,7 @@ abstract public class Executing extends Protocol {
      */
     protected static final Object PRESENT = new Object();
 
-    protected static class Request implements Streamable {
+    protected static class Request implements Streamable, Constructable<Request> {
         protected Type    type;
         protected Object  object;
         protected long   request;
@@ -942,6 +945,10 @@ abstract public class Executing extends Protocol {
             this.type=type;
             this.object=object;
             this.request=request;
+        }
+
+        public Supplier<? extends Request> create() {
+            return Request::new;
         }
 
         public void writeTo(DataOutput out) throws Exception {
@@ -1011,7 +1018,11 @@ abstract public class Executing extends Protocol {
             super(type, object, request);
             this.threadId = threadId;
         }
-        
+
+        public Supplier<? extends Request> create() {
+            return RequestWithThread::new;
+        }
+
         @Override
         public void readFrom(DataInput in) throws Exception {
             super.readFrom(in);
@@ -1035,10 +1046,12 @@ abstract public class Executing extends Protocol {
 
         public ExecutorHeader() {
         }
-
-        public int size() {
+        public short getMagicId() {return 73;}
+        public int serializedSize() {
             return 0;
         }
+
+        public Supplier<? extends Header> create() {return ExecutorHeader::new;}
 
         public void writeTo(DataOutput out) throws Exception {
         }

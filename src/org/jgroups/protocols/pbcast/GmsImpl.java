@@ -2,7 +2,6 @@
 package org.jgroups.protocols.pbcast;
 
 import org.jgroups.Address;
-import org.jgroups.Event;
 import org.jgroups.Message;
 import org.jgroups.View;
 import org.jgroups.logging.Log;
@@ -37,10 +36,10 @@ public abstract class GmsImpl {
     public void               suspect(Address mbr)   {}
     public void               unsuspect(Address mbr) {}
 
-    public void               merge(Map<Address,View> views)                               {} // only processed by coord
+    public void               merge(Map<Address,View> views)                        {}
     public void               handleMergeRequest(Address sender, MergeId merge_id, Collection<? extends Address> mbrs)  {}
-    public void               handleMergeResponse(MergeData data, MergeId merge_id) {} // only processed by coords
-    public void               handleMergeView(MergeData data, MergeId merge_id)     {} // only processed by coords
+    public void               handleMergeResponse(MergeData data, MergeId merge_id) {}
+    public void               handleMergeView(MergeData data, MergeId merge_id)     {}
     public void               handleMergeCancelled(MergeId merge_id)                {} // only processed by coords
     public void               handleDigestResponse(Address sender, Digest digest)   {} // only processed by coords
 
@@ -60,7 +59,7 @@ public abstract class GmsImpl {
         hdr.merge_id=merge_id;
         msg.putHeader(gms.getId(), hdr);
         log.debug("%s: merge response=%s", gms.local_addr, hdr);
-        gms.getDownProtocol().down(new Event(Event.MSG, msg));
+        gms.getDownProtocol().down(msg);
     }
 
 

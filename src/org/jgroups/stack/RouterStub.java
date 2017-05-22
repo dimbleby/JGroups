@@ -11,6 +11,7 @@ import org.jgroups.util.ByteArrayDataInputStream;
 import org.jgroups.util.ByteArrayDataOutputStream;
 import org.jgroups.util.Util;
 
+import java.io.DataInput;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.util.*;
@@ -118,10 +119,12 @@ public class RouterStub extends ReceiverAdapter implements Comparable<RouterStub
         synchronized(this) {
             _doConnect();
         }
-        GossipData request=new GossipData(GossipType.REGISTER, group, addr, logical_name, phys_addr);
-        ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(request.size()+10);
-        request.writeTo(out);
-        client.send(remote, out.buffer(), 0, out.position());
+        try {
+            writeRequest(new GossipData(GossipType.REGISTER, group, addr, logical_name, phys_addr));
+        }
+        catch(Exception ex) {
+            throw new Exception(String.format("connection to %s failed: %s", group, ex));
+        }
     }
 
     public synchronized void connect() throws Exception {
@@ -170,13 +173,13 @@ public class RouterStub extends ReceiverAdapter implements Comparable<RouterStub
     }
 
 
-    public void sendToAllMembers(String group, byte[] data, int offset, int length) throws Exception {
-        sendToMember(group, null, data, offset, length); // null destination represents mcast
+    public void sendToAllMembers(String group, Address sender, byte[] data, int offset, int length) throws Exception {
+        sendToMember(group, null, sender, data, offset, length); // null destination represents mcast
     }
 
-    public void sendToMember(String group, Address dest, byte[] data, int offset, int length) throws Exception {
+    public void sendToMember(String group, Address dest, Address sender, byte[] data, int offset, int length) throws Exception {
         try {
-            writeRequest(new GossipData(GossipType.MESSAGE, group, dest, data, offset, length));
+            writeRequest(new GossipData(GossipType.MESSAGE, group, dest, data, offset, length).setSender(sender));
         }
         catch(Exception ex) {
             throw new Exception(String.format("connection to %s broken. Could not send message to %s: %s",
@@ -212,6 +215,20 @@ public class RouterStub extends ReceiverAdapter implements Comparable<RouterStub
         Util.bufferToArray(sender, buf, this);
     }
 
+    public void receive(Address sender, DataInput in) throws Exception {
+        GossipData data=new GossipData();
+        data.readFrom(in);
+        switch(data.getType()) {
+            case MESSAGE:
+            case SUSPECT:
+                if(receiver != null)
+                    receiver.receive(data);
+                break;
+            case GET_MBRS_RSP:
+                notifyResponse(data.getGroup(), data.getPingData());
+                break;
+        }
+    }
 
     @Override
     public void connectionClosed(Connection conn, String reason) {
@@ -240,7 +257,8 @@ public class RouterStub extends ReceiverAdapter implements Comparable<RouterStub
 
 
     protected synchronized void writeRequest(GossipData req) throws Exception {
-        ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(req.size());
+        int size=req.serializedSize();
+        ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(size+5);
         req.writeTo(out);
         client.send(remote, out.buffer(), 0, out.position());
     }

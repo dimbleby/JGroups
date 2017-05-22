@@ -15,18 +15,16 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.NotSerializableException;
 import java.lang.reflect.InvocationTargetException;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 
 /**
  * Framework to send requests and receive matching responses (on request ID).
  * Multiple requests can be sent at a time. Whenever a response is received, the correct {@code Request} is looked up
- * (key = id) and its method {@code receiveResponse()} invoked.<p>
+ * (key = id) and its method {@code receiveResponse()} invoked.
  * @author Bela Ban
  */
 public class RequestCorrelator {
@@ -62,7 +60,9 @@ public class RequestCorrelator {
     // send exceptions back wrapped in an {@link InvocationTargetException}, or not
     protected boolean                                wrap_exceptions=false;
 
-    private final MyProbeHandler                     probe_handler=new MyProbeHandler();
+    protected final MyProbeHandler                   probe_handler=new MyProbeHandler();
+
+    protected final RpcStats                         rpc_stats=new RpcStats(false);
 
     protected static final Log                       log=LogFactory.getLog(RequestCorrelator.class);
 
@@ -101,7 +101,6 @@ public class RequestCorrelator {
 
     public Address                getLocalAddress()              {return local_addr;}
     public RequestCorrelator      setLocalAddress(Address a)     {this.local_addr=a; return this;}
-    protected RequestCorrelator   removeEntry(long id)           {requests.remove(id); return this;}
     public Marshaller             getMarshaller()                {return marshaller;}
     public RequestCorrelator      setMarshaller(Marshaller m)    {this.marshaller=m; return this;}
     public boolean                asyncDispatching()             {return async_dispatching;}
@@ -133,7 +132,7 @@ public class RequestCorrelator {
         Message msg=new Message(null, data).putHeader(this.corr_id, hdr)
           .setFlag(opts.flags()).setTransientFlag(opts.transientFlags());
 
-        if(req != null) {
+        if(req != null) { // sync
             long req_id=REQUEST_ID.getAndIncrement();
             req.requestId(req_id);
             hdr.requestId(req_id); // set the request-id only for *synchronous RPCs*
@@ -142,11 +141,19 @@ public class RequestCorrelator {
             requests.putIfAbsent(req_id, req);
             // make sure no view is received before we add ourself as a view handler (https://issues.jboss.org/browse/JGRP-1428)
             req.viewChange(view);
+            if(rpc_stats.extendedStats())
+                req.start_time=System.nanoTime();
+        }
+        else {  // async
+            if(opts != null && opts.anycasting())
+                rpc_stats.addAnycast(false, 0, dest_mbrs);
+            else
+                rpc_stats.add(RpcStats.Type.MULTICAST, null, false, 0);
         }
 
         if(opts.anycasting()) {
             if(opts.useAnycastAddresses()) {
-                transport.down(new Event(Event.MSG, msg.dest(new AnycastAddress(dest_mbrs))));
+                transport.down(msg.dest(new AnycastAddress(dest_mbrs)));
             }
             else {
                 boolean first=true;
@@ -155,12 +162,12 @@ public class RequestCorrelator {
                     first=false;
                     if(!mbr.equals(local_addr) && copy.isTransientFlagSet(Message.TransientFlag.DONT_LOOPBACK))
                         copy.clearTransientFlag(Message.TransientFlag.DONT_LOOPBACK);
-                    transport.down(new Event(Event.MSG, copy));
+                    transport.down(copy);
                 }
             }
         }
         else
-            transport.down(new Event(Event.MSG, msg));
+            transport.down(msg);
     }
 
     /** Sends a request to a single destination */
@@ -174,7 +181,7 @@ public class RequestCorrelator {
         Message msg=new Message(dest, data).putHeader(this.corr_id, hdr)
           .setFlag(opts.flags()).setTransientFlag(opts.transientFlags());
 
-        if(req != null) {
+        if(req != null) { // sync RPC
             long req_id=REQUEST_ID.getAndIncrement();
             req.requestId(req_id);
             hdr.requestId(req_id); // set the request-id only for *synchronous RPCs*
@@ -183,8 +190,12 @@ public class RequestCorrelator {
             requests.putIfAbsent(req_id, req);
             // make sure no view is received before we add ourself as a view handler (https://issues.jboss.org/browse/JGRP-1428)
             req.viewChange(view);
+            if(rpc_stats.extendedStats())
+                req.start_time=System.nanoTime();
         }
-        transport.down(new Event(Event.MSG, msg));
+        else // async RPC
+            rpc_stats.add(RpcStats.Type.UNICAST, dest, false, 0);
+        transport.down(msg);
     }
 
 
@@ -213,19 +224,15 @@ public class RequestCorrelator {
     public boolean receive(Event evt) {
         switch(evt.getType()) {
             case Event.VIEW_CHANGE: // adjust number of responses to wait for
-                receiveView((View)evt.getArg());
+                receiveView(evt.getArg());
                 break;
 
             case Event.SET_LOCAL_ADDRESS:
-                setLocalAddress((Address)evt.getArg());
+                setLocalAddress(evt.getArg());
                 break;
 
-            case Event.MSG:
-                if(receiveMessage((Message)evt.getArg()))
-                    return true; // message was consumed, don't pass it up
-                break;
             case Event.SITE_UNREACHABLE:
-                SiteMaster site_master=(SiteMaster)evt.getArg();
+                SiteMaster site_master=evt.getArg();
                 String site=site_master.getSite();
                 setSiteUnreachable(site);
                 break; // let others have a stab at this event, too
@@ -261,7 +268,7 @@ public class RequestCorrelator {
 
     /** An entire site is down; mark all requests that point to that site as unreachable (used by RELAY2) */
     public void setSiteUnreachable(String site) {
-        requests.values().stream().filter(req -> req != null).forEach(req -> req.siteUnreachable(site));
+        requests.values().stream().filter(Objects::nonNull).forEach(req -> req.siteUnreachable(site));
     }
 
 
@@ -270,7 +277,7 @@ public class RequestCorrelator {
      */
     public void receiveView(View new_view) {
         view=new_view; // move this before the iteration (JGRP-1428)
-        requests.values().stream().filter(req -> req != null).forEach(req -> req.viewChange(new_view));
+        requests.values().stream().filter(Objects::nonNull).forEach(req -> req.viewChange(new_view));
     }
 
 
@@ -279,13 +286,13 @@ public class RequestCorrelator {
      * @return true if the message was consumed, don't pass it further up, else false
      */
     public boolean receiveMessage(Message msg) {
-        Header hdr=(Header)msg.getHeader(this.corr_id);
+        Header hdr=msg.getHeader(this.corr_id);
 
         // Check if the message was sent by a request correlator with the same name;
         // there may be multiple request correlators in the same protocol stack
         if(hdr == null || hdr.corrId != this.corr_id) {
-            log.trace("ID of request correlator header (%d) is different from ours (%d). Msg not accepted, passed up",
-                      hdr.corrId, this.corr_id);
+            log.trace("ID of request correlator header (%s) is different from ours (%d). Msg not accepted, passed up",
+                      hdr != null? String.valueOf(hdr.corrId) : "null", this.corr_id);
             return false;
         }
 
@@ -303,7 +310,7 @@ public class RequestCorrelator {
 
     public void receiveMessageBatch(MessageBatch batch) {
         for(Message msg : batch) {
-            Header hdr=(Header)msg.getHeader(this.corr_id);
+            Header hdr=msg.getHeader(this.corr_id);
             if(hdr == null || hdr.corrId != this.corr_id) // msg was sent by a different request corr in the same stack
                 continue;
 
@@ -323,6 +330,26 @@ public class RequestCorrelator {
 
 
     // .......................................................................
+    protected RequestCorrelator removeEntry(long id) {
+        Request req=requests.remove(id);
+        if(req != null) {
+            long time_ns=req.start_time > 0? System.nanoTime() - req.start_time : 0;
+            if(req instanceof UnicastRequest)
+                rpc_stats.add(RpcStats.Type.UNICAST, ((UnicastRequest)req).target, true, time_ns);
+            else if(req instanceof GroupRequest) {
+                if(req.options != null && req.options.anycasting())
+                    rpc_stats.addAnycast(true, time_ns, ((GroupRequest)req).rsps.keySet());
+                else
+                    rpc_stats.add(RpcStats.Type.MULTICAST, null, true, time_ns);
+            }
+            else
+                log.error("request type %s not known", req != null? req.getClass().getSimpleName() : req);
+        }
+        return this;
+    }
+
+
+
     protected void dispatch(final Message msg, final Header hdr) {
         switch(hdr.type) {
             case Header.REQ:
@@ -418,7 +445,7 @@ public class RequestCorrelator {
         rsp.putHeader(corr_id, rsp_hdr);
         if(log.isTraceEnabled())
             log.trace("sending rsp for %d to %s", req_id, rsp.getDest());
-        transport.down(new Event(Event.MSG, rsp));
+        transport.down(rsp);
     }
 
     protected static Buffer replyToBuffer(Object obj, Marshaller marshaller) throws Exception {
@@ -497,6 +524,9 @@ public class RequestCorrelator {
             this.req_id=req_id;
             return this;
         }
+        public short getMagicId() {return 67;}
+        public Supplier<? extends org.jgroups.Header> create() {return Header::new;}
+
         public long    requestId()   {return req_id;}
         public boolean rspExpected() {return req_id > 0;}
         public short   corrId()      {return corrId;}
@@ -530,7 +560,7 @@ public class RequestCorrelator {
             corrId=in.readShort();
         }
 
-        public int size() {
+        public int serializedSize() {
             return Global.BYTE_SIZE  // type
               + Bits.size(req_id)    // req_id
               + Global.SHORT_SIZE;   // corrId
@@ -550,6 +580,10 @@ public class RequestCorrelator {
             super(type, id, corr_id);
             this.exclusion_list=exclusion_list;
         }
+        public short getMagicId() {return 68;}
+        public Supplier<? extends org.jgroups.Header> create() {
+            return MultiDestinationHeader::new;
+        }
 
         public void writeTo(DataOutput out) throws Exception {
             super.writeTo(out);
@@ -561,8 +595,8 @@ public class RequestCorrelator {
             exclusion_list=Util.readAddresses(in);
         }
 
-        public int size() {
-            return (int)(super.size() + Util.size(exclusion_list));
+        public int serializedSize() {
+            return (int)(super.serializedSize() + Util.size(exclusion_list));
         }
 
         public String toString() {
@@ -592,13 +626,36 @@ public class RequestCorrelator {
                     case "reqtable-info":
                         retval.put(key, String.format("size=%d, next-id=%d", requests.size(), REQUEST_ID.get()));
                         break;
+                    case "rpcs":
+                        retval.put("sync  unicast   RPCs", String.valueOf(rpc_stats.unicasts(true)));
+                        retval.put("sync  multicast RPCs", String.valueOf(rpc_stats.multicasts(true)));
+                        retval.put("async unicast   RPCs", String.valueOf(rpc_stats.unicasts(false)));
+                        retval.put("async multicast RPCs", String.valueOf(rpc_stats.multicasts(false)));
+                        retval.put("sync  anycast   RPCs", String.valueOf(rpc_stats.anycasts(true)));
+                        retval.put("async anycast   RPCs", String.valueOf(rpc_stats.anycasts(false)));
+                        break;
+                    case "rpcs-reset":
+                        rpc_stats.reset();
+                        break;
+                    case "rpcs-enable-details":
+                        rpc_stats.extendedStats(true);
+                        break;
+                    case "rpcs-disable-details":
+                        rpc_stats.extendedStats(false);
+                        break;
+                    case "rpcs-details":
+                        if(!rpc_stats.extendedStats())
+                            retval.put(key, "<details not enabled: use rpcs-enable-details to enable>");
+                        else
+                            retval.put(key, rpc_stats.printOrderByDest());
+                        break;
                 }
             }
             return retval;
         }
 
         public String[] supportedKeys() {
-            return new String[]{"requests", "reqtable-info"};
+            return new String[]{"requests", "reqtable-info", "rpcs", "rpcs-reset", "rpcs-enable-details", "rpcs-disable-details", "rpcs-details"};
         }
     }
 
